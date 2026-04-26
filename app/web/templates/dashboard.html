@@ -1,56 +1,141 @@
 {% extends "base.html" %}
-{% block title %}Дашборд — аналитика цен{% endblock %}
+{% block title %}Дашборд — ценовая аналитика{% endblock %}
 {% block head_extra %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 {% endblock %}
 {% block content %}
-<div class="grid">
-    <div class="card">
-        <div class="muted">Всего товаров в БД</div>
-        <div class="stat">{{ total_products }}</div>
-    </div>
-    <div class="card">
-        <div class="muted">Аномалий (ИИ)</div>
-        <div class="stat">{{ anomalies_n }}</div>
-    </div>
-    <div class="card">
-        <div class="muted">Кандидатов (TF‑IDF, EKF↔TDM)</div>
-        <div class="stat">{{ matches_suggested_n }}</div>
-    </div>
-    <div class="card">
-        <div class="muted">Подтверждённых пар (ревью)</div>
-        <div class="stat">{{ matches_confirmed_n }}</div>
-    </div>
-    <div class="card">
-        <div class="muted">Цена (руб.) min / max / средн.</div>
-        <div class="stat" style="font-size:1.1rem">{{ "%.0f"|format(price_min) }} — {{ "%.0f"|format(price_max) }}</div>
-        <div class="muted">средн. {{ "%.2f"|format(price_avg) }}</div>
+
+<div class="page-header">
+    <h1>Сегодня: действия</h1>
+    <div class="page-subtitle">
+        Price intelligence: сигналы к цене, ручной ревью сопоставлений, здоровье источников. Наш прайс: <code>{{ our_pricing_source }}</code>
+        {% if last_update %} · products обновлён {{ last_update.strftime("%d.%m.%Y %H:%M") }} UTC{% endif %}
     </div>
 </div>
 
+{# ─── Today actions (KPI + governance) ─── #}
+<div class="grid-2" style="margin-bottom:1rem">
+    <div class="card">
+        <div class="card-title">Ценовые сигналы (KPI)</div>
+        <p class="muted" style="margin-bottom:0.75rem">По canonical-слою после collector и синхронизации бренд/артикул.</p>
+        <div class="attention-list">
+            <div class="attention-item ai-danger"><span>Дороже рынка (&gt;15% к медиане): <strong>{{ today.out_of_market_n }}</strong> SKU</span> <a class="ai-link" href="/market">Рынок</a></div>
+            <div class="attention-item ai-warning"><span>Ниже floor (маржа): <strong>{{ today.below_floor_n }}</strong> SKU</span> <a class="ai-link" href="/market">Рынок</a></div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-title">Matching и источники</div>
+        <div class="attention-list">
+            <div class="attention-item ai-info"><span>Кандидаты TF-IDF (только ревью): <strong>{{ today.pending_fuzzy_n }}</strong></span> <a class="ai-link" href="/matches">Сопоставления</a></div>
+            <div class="attention-item ai-muted"><span>Источник не обновлялся &gt;48ч: <strong>{{ today.stale_source_n }}</strong></span> <a class="ai-link" href="/sources">Источники</a></div>
+            <div class="attention-item ai-muted"><span>Низкий usable_score (&lt;порог KPI): <strong>{{ today.low_usable_n }}</strong></span> <a class="ai-link" href="/sources">Источники</a></div>
+        </div>
+    </div>
+</div>
+
+{# ─── KPI row ─── #}
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-label">Товаров в базе</div>
+        <div class="kpi-value kv-accent">{{ total_products }}</div>
+        <div class="kpi-sub">
+            {{ shops_n }} {% if shops_n == 1 %}источник{% elif shops_n in [2, 3, 4] %}источника{% else %}источников{% endif %}
+        </div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Аномалий цен</div>
+        <div class="kpi-value {% if anomalies_n >= 10 %}kv-danger{% elif anomalies_n > 0 %}kv-warning{% else %}kv-muted{% endif %}">
+            {{ anomalies_n }}
+        </div>
+        <div class="kpi-sub">
+            {% if anomalies_n > 0 %}<a class="row-link" href="/alerts">Алерты</a>{% else %}нет аномалий{% endif %}
+        </div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Ожидают ревью</div>
+        <div class="kpi-value {% if matches_suggested_n > 0 %}kv-accent{% else %}kv-muted{% endif %}">
+            {{ matches_suggested_n }}
+        </div>
+        <div class="kpi-sub">кандидатов сопоставления</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Подтверждённых пар</div>
+        <div class="kpi-value {% if matches_confirmed_n > 0 %}kv-success{% else %}kv-muted{% endif %}">
+            {{ matches_confirmed_n }}
+        </div>
+        <div class="kpi-sub">{{ matches_rejected_n }} отклонено</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Диапазон цен</div>
+        <div class="kpi-value" style="font-size:1.1rem;">{{ "%.0f"|format(price_min) }} — {{ "%.0f"|format(price_max) }}</div>
+        <div class="kpi-sub">средн. {{ "%.2f"|format(price_avg) }} ₽</div>
+    </div>
+</div>
+
+{# ─── Attention items ─── #}
+{% if attention_items %}
 <div class="card">
-    <h2 style="margin-top:0;font-size:1rem;">Источники</h2>
+    <div class="card-title">Требует внимания</div>
+    <div class="attention-list">
+        {% for item in attention_items %}
+        <div class="attention-item ai-{{ item.level }}">
+            <span>{{ item.label }}</span>
+            {% if item.link %}<a class="ai-link" href="{{ item.link }}">{{ item.link_text }}</a>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{# ─── Charts ─── #}
+<div class="grid-2">
+    <div class="card">
+        <div class="card-title">Товаров по источникам</div>
+        {% if shops %}
+        <canvas id="shopsChart" height="160"></canvas>
+        {% else %}
+        <div class="empty-state"><div class="empty-icon">📦</div><p>Нет данных — дождитесь загрузки collector.</p></div>
+        {% endif %}
+    </div>
+    <div class="card">
+        <div class="card-title">Средняя цена по дням</div>
+        {% if trend_labels_json != "[]" %}
+        <canvas id="trendChart" height="160"></canvas>
+        {% else %}
+        <div class="empty-state"><div class="empty-icon">📈</div><p>История цен ещё не накоплена.</p></div>
+        {% endif %}
+    </div>
+</div>
+
+{# ─── Sources table ─── #}
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Источники данных</div>
+        {% if last_update %}
+        <span class="muted">обновлено {{ last_update.strftime("%d.%m %H:%M") }} UTC</span>
+        {% endif %}
+    </div>
     {% if shops %}
     <table>
-        <thead><tr><th>Магазин</th><th>Товаров</th></tr></thead>
+        <thead><tr><th>Источник</th><th>Товаров</th></tr></thead>
         <tbody>
         {% for name, cnt in shops %}
-            <tr><td>{{ name }}</td><td>{{ cnt }}</td></tr>
+        <tr><td>{{ name }}</td><td>{{ cnt }}</td></tr>
         {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <p class="muted">Нет данных — дождитесь загрузки collector.</p>
-    {% endif %}
-    {% if last_update %}
-    <p class="muted" style="margin-bottom:0;">Последнее обновление товаров: {{ last_update }} UTC</p>
+    <div class="empty-state"><p>Нет данных. Запустите collector.</p></div>
     {% endif %}
 </div>
 
+{# ─── Quality: completeness ─── #}
+{% if shop_completeness %}
 <div class="card">
-    <h2 style="margin-top:0;font-size:1rem;">Полнота идентификаторов по источникам</h2>
-    <p class="muted" style="margin-top:0;">Доля строк с штрихкодом, артикулом, category_id, name_norm (для оценки пригодности exact-сопоставления).</p>
-    {% if shop_completeness %}
+    <div class="card-header">
+        <div class="card-title">Заполненность идентификаторов</div>
+        <span class="muted" style="font-size:0.78rem;">% строк с заполненным полем — основа для exact-сопоставления</span>
+    </div>
     <table>
         <thead>
             <tr>
@@ -58,97 +143,100 @@
                 <th>Всего</th>
                 <th>Штрихкод</th>
                 <th>Артикул</th>
-                <th>category_id</th>
-                <th>name_norm</th>
+                <th>Категория</th>
+                <th>Норм. имя</th>
             </tr>
         </thead>
         <tbody>
         {% for r in shop_completeness %}
-            <tr>
-                <td>{{ r.source_shop }}</td>
-                <td>{{ r.total }}</td>
-                <td>{{ r.pct(r.with_barcode) }}% ({{ r.with_barcode }})</td>
-                <td>{{ r.pct(r.with_vendor_code) }}% ({{ r.with_vendor_code }})</td>
-                <td>{{ r.pct(r.with_category_id) }}% ({{ r.with_category_id }})</td>
-                <td>{{ r.pct(r.with_name_norm) }}% ({{ r.with_name_norm }})</td>
-            </tr>
+        <tr>
+            <td>{{ r.source_shop }}</td>
+            <td>{{ r.total }}</td>
+            <td>
+                {% set pct = r.pct(r.with_barcode) %}
+                <span class="{% if pct >= 50 %}text-success{% elif pct >= 15 %}text-warning{% else %}text-danger{% endif %}">
+                    {{ pct }}%
+                </span>
+                <span class="muted">({{ r.with_barcode }})</span>
+            </td>
+            <td>
+                {% set pct = r.pct(r.with_vendor_code) %}
+                <span class="{% if pct >= 50 %}text-success{% elif pct >= 15 %}text-warning{% else %}text-danger{% endif %}">
+                    {{ pct }}%
+                </span>
+                <span class="muted">({{ r.with_vendor_code }})</span>
+            </td>
+            <td>{{ r.pct(r.with_category_id) }}% <span class="muted">({{ r.with_category_id }})</span></td>
+            <td>{{ r.pct(r.with_name_norm) }}% <span class="muted">({{ r.with_name_norm }})</span></td>
+        </tr>
         {% endfor %}
         </tbody>
     </table>
-    {% else %}
-    <p class="muted">Нет данных.</p>
-    {% endif %}
 </div>
+{% endif %}
 
+{# ─── Quality: key overlaps ─── #}
+{% if key_overlaps %}
 <div class="card">
-    <h2 style="margin-top:0;font-size:1rem;">Пересечения exact-ключей между парами магазинов</h2>
-    <p class="muted" style="margin-top:0;">Число общих непустых значений по полю (как в ``python -m app.overlap_report``). Высокий пересчёт по barcode — сильный сигнал; name_norm — только если наименования согласованы между фидами.</p>
-    {% if key_overlaps %}
+    <div class="card-header">
+        <div class="card-title">Пересечения exact-ключей между источниками</div>
+        <span class="muted" style="font-size:0.78rem;">Общих непустых значений — высокий barcode-overlap = надёжный сигнал</span>
+    </div>
     <table>
         <thead>
-            <tr>
-                <th>Магазин A</th>
-                <th>Магазин B</th>
-                <th>Поле</th>
-                <th>Общих</th>
-            </tr>
+            <tr><th>Источник A</th><th>Источник B</th><th>Поле</th><th>Общих значений</th></tr>
         </thead>
         <tbody>
         {% for o in key_overlaps %}
-            <tr>
-                <td>{{ o.shop_a }}</td>
-                <td>{{ o.shop_b }}</td>
-                <td>{{ o.field }}</td>
-                <td>{{ o.overlap_count }}</td>
-            </tr>
+        <tr>
+            <td>{{ o.shop_a }}</td>
+            <td>{{ o.shop_b }}</td>
+            <td><span class="badge">{{ o.field }}</span></td>
+            <td>
+                <span class="{% if o.overlap_count > 50 %}text-success{% elif o.overlap_count > 0 %}text-warning{% else %}muted{% endif %}">
+                    {{ o.overlap_count }}
+                </span>
+            </td>
+        </tr>
         {% endfor %}
         </tbody>
     </table>
-    {% else %}
-    <p class="muted">Нет пар для сравнения (загрузите collector).</p>
-    {% endif %}
 </div>
+{% endif %}
 
-<div class="grid" style="grid-template-columns: 1fr 1fr; gap: 1rem;">
-    <div class="card">
-        <h2 style="margin-top:0;font-size:1rem;">Товары по источникам</h2>
-        <canvas id="shopsChart" height="160"></canvas>
-    </div>
-    <div class="card">
-        <h2 style="margin-top:0;font-size:1rem;">Средняя цена по дням (последние точки истории)</h2>
-        <canvas id="trendChart" height="160"></canvas>
-    </div>
-</div>
-
+{# ─── Exports ─── #}
 <div class="card">
-    <p class="muted" style="margin:0;">
-        Экспорт: <a class="row-link" href="/export/products.csv">products.csv</a> ·
-        <a class="row-link" href="/export/anomalies.csv">anomalies.csv</a>
-    </p>
+    <div class="card-title">Экспорт данных</div>
+    <div class="form-row">
+        <a class="btn btn-ghost btn-sm" href="/export/products.csv">Товары CSV</a>
+        <a class="btn btn-ghost btn-sm" href="/export/anomalies.csv">Аномалии CSV</a>
+    </div>
 </div>
+
 <script>
 (function () {
-    const shopLabels = {{ shop_labels_json|safe }};
-    const shopCounts = {{ shop_counts_json|safe }};
+    const shopLabels  = {{ shop_labels_json|safe }};
+    const shopCounts  = {{ shop_counts_json|safe }};
     const trendLabels = {{ trend_labels_json|safe }};
     const trendValues = {{ trend_values_json|safe }};
-    const chartColor = '#3d8bfd';
-    const gridColor = 'rgba(139, 156, 179, 0.25)';
+
+    const accent    = '#3b82f6';
+    const gridColor = 'rgba(139,156,179,0.18)';
+    const tickColor = '#8b9cb3';
+
+    const baseScales = {
+        x: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor } },
+        y: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
+    };
+
     if (document.getElementById('shopsChart') && shopLabels.length) {
         new Chart(document.getElementById('shopsChart'), {
             type: 'bar',
             data: {
                 labels: shopLabels,
-                datasets: [{ label: 'Товаров', data: shopCounts, backgroundColor: chartColor }]
+                datasets: [{ label: 'Товаров', data: shopCounts, backgroundColor: accent, borderRadius: 4 }]
             },
-            options: {
-                responsive: true,
-                plugins: { legend: { display: false } },
-                scales: {
-                    x: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor } },
-                    y: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor }, beginAtZero: true }
-                }
-            }
+            options: { responsive: true, plugins: { legend: { display: false } }, scales: baseScales }
         });
     }
     if (document.getElementById('trendChart') && trendLabels.length) {
@@ -159,19 +247,17 @@
                 datasets: [{
                     label: 'Средняя цена, ₽',
                     data: trendValues,
-                    borderColor: chartColor,
-                    backgroundColor: 'rgba(61, 139, 253, 0.15)',
+                    borderColor: accent,
+                    backgroundColor: 'rgba(59,130,246,0.1)',
                     fill: true,
-                    tension: 0.2
+                    tension: 0.3,
+                    pointRadius: 3,
                 }]
             },
             options: {
                 responsive: true,
-                plugins: { legend: { labels: { color: '#e7ecf3' } } },
-                scales: {
-                    x: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor } },
-                    y: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor } }
-                }
+                plugins: { legend: { labels: { color: '#e6edf3', font: { size: 11 } } } },
+                scales: baseScales,
             }
         });
     }

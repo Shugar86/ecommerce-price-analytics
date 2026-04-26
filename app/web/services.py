@@ -11,13 +11,30 @@ from sqlalchemy.orm import Session
 from app.database import (
     MATCH_KIND_FUZZY_TFIDF,
     MATCH_STATUS_CONFIRMED,
+    MATCH_STATUS_REJECTED,
     MATCH_STATUS_SUGGESTED,
     PriceAnomaly,
     PriceHistory,
     Product,
     ProductMatch,
 )
+from app.analytics.price_intelligence import (
+    TodayActionStats,
+    compute_today_action_counts,
+    our_pricing_source,
+)
+from app.database import SourceHealth
 from app.quality.coverage import build_quality_dashboard_slice
+from sqlalchemy import select as sa_select
+
+
+def list_source_health_rows(session: Session) -> list[SourceHealth]:
+    """Все записи source_health для /sources (реестр)."""
+    return list(
+        session.execute(
+            sa_select(SourceHealth).order_by(SourceHealth.source_name.asc())
+        ).scalars().all()
+    )
 
 
 def build_dashboard_template_context(session: Session) -> dict[str, Any]:
@@ -54,7 +71,54 @@ def build_dashboard_template_context(session: Session) -> dict[str, Any]:
         )
         or 0
     )
+    matches_rejected_n = (
+        session.scalar(
+            select(func.count(ProductMatch.id)).where(
+                ProductMatch.match_status == MATCH_STATUS_REJECTED
+            )
+        )
+        or 0
+    )
+
     quality = build_quality_dashboard_slice(session)
+    shop_completeness = quality.get("shop_completeness", [])
+
+    # Sources where neither barcode nor vendor_code is substantially filled.
+    weak_sources = [
+        r for r in shop_completeness
+        if r.total > 10 and r.pct(r.with_barcode) < 15 and r.pct(r.with_vendor_code) < 15
+    ]
+
+    attention_items: list[dict[str, Any]] = []
+    if anomalies_n >= 10:
+        attention_items.append({
+            "level": "danger",
+            "label": f"Обнаружено {anomalies_n} аномалий цен",
+            "link": "/alerts",
+            "link_text": "Посмотреть",
+        })
+    elif anomalies_n > 0:
+        attention_items.append({
+            "level": "warning",
+            "label": f"Обнаружено {anomalies_n} аномалий цен",
+            "link": "/alerts",
+            "link_text": "Посмотреть",
+        })
+    if matches_suggested_n > 0:
+        attention_items.append({
+            "level": "info",
+            "label": f"{matches_suggested_n} кандидатов на сопоставление ожидают ревью аналитика",
+            "link": "/matches",
+            "link_text": "Перейти",
+        })
+    if weak_sources:
+        names = ", ".join(r.source_shop for r in weak_sources[:3])
+        attention_items.append({
+            "level": "muted",
+            "label": f"Источники без надёжных идентификаторов (нет штрихкодов/артикулов): {names}",
+            "link": None,
+            "link_text": None,
+        })
 
     day_col = cast(PriceHistory.collected_at, Date)
     history_trend = session.execute(
@@ -70,9 +134,14 @@ def build_dashboard_template_context(session: Session) -> dict[str, Any]:
     shop_labels = [s for s, _ in shops if s]
     shop_counts = [int(c) for s, c in shops if s]
 
+    today: TodayActionStats = compute_today_action_counts(
+        session, our_src=our_pricing_source()
+    )
+
     return {
         "total_products": int(total),
         "shops": [(s, int(c)) for s, c in shops if s],
+        "shops_n": len([s for s, _ in shops if s]),
         "last_update": last_upd,
         "price_min": float(price_stats[0] or 0),
         "price_max": float(price_stats[1] or 0),
@@ -80,9 +149,13 @@ def build_dashboard_template_context(session: Session) -> dict[str, Any]:
         "anomalies_n": int(anomalies_n),
         "matches_suggested_n": int(matches_suggested_n),
         "matches_confirmed_n": int(matches_confirmed_n),
+        "matches_rejected_n": int(matches_rejected_n),
+        "attention_items": attention_items,
         "shop_labels_json": json.dumps(shop_labels, ensure_ascii=False),
         "shop_counts_json": json.dumps(shop_counts, ensure_ascii=False),
         "trend_labels_json": json.dumps(trend_labels, ensure_ascii=False),
         "trend_values_json": json.dumps(trend_values, ensure_ascii=False),
+        "our_pricing_source": our_pricing_source(),
+        "today": today,
         **quality,
     }

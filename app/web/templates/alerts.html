@@ -1,20 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Аномалии цен{% endblock %}
+{% block title %}Ценовые алерты{% endblock %}
 {% block content %}
 
 <div class="page-header">
-    <h1>Аномалии цен</h1>
+    <h1>Ценовые алерты</h1>
     <div class="page-subtitle">
-        Эвристики: резкие скачки, паттерны «подняли перед скидкой», z-отклонения в ряду доходностей.
-        Пересчитываются воркером по расписанию.
+        Эвристики: скачки, паттерн «рост перед скидкой», z-отклонения в ряду цен. Пересчёт воркером; для KPI и позиции на рынке используйте
+        <a class="row-link" href="/market">рынок</a>.
     </div>
 </div>
 
-{# ─── Type summary ─── #}
+{# ─── Type summary (same as legacy anomalies) ─── #}
 {% if rows %}
 <div class="card">
     <div class="card-header">
-        <div class="card-title">Итого: {{ rows|length }} аномалий</div>
+        <div class="card-title">Итого: {{ rows|length }} срабатываний</div>
         <a class="btn btn-ghost btn-sm" href="/export/anomalies.csv">Скачать CSV</a>
     </div>
     {% if type_counts %}
@@ -42,7 +42,6 @@
 </div>
 {% endif %}
 
-{# ─── Table ─── #}
 <div class="card">
     {% if rows %}
     <table>
@@ -100,9 +99,8 @@
     {% else %}
     <div class="empty-state">
         <div class="empty-icon">✅</div>
-        <p><strong>Аномалий нет.</strong></p>
-        <p>Для обнаружения нужна история цен (минимум 2–3 точки на товар) и работающий воркер.</p>
-        <p>При <code>SEED_DEMO_HISTORY=1</code> демо-данные добавляются автоматически.</p>
+        <p><strong>Алертов нет.</strong></p>
+        <p>Нужна история цен (2–3 точки на товар) и воркер. При <code>SEED_DEMO_HISTORY=1</code> демо-точки добавляются в воркере.</p>
     </div>
     {% endif %}
 </div>

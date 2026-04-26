@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Источники данных{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>Реестр источников</h1>
+    <div class="page-subtitle">Health после последней загрузки collector: покрытие цены / артикула / штрихкода и usable_score.</div>
+</div>
+
+<div class="card">
+    {% if sources %}
+    <table>
+        <thead>
+            <tr>
+                <th>Источник</th>
+                <th>URL</th>
+                <th>Обновлён (UTC)</th>
+                <th>Строк</th>
+                <th>Артикул %</th>
+                <th>Штрихкод %</th>
+                <th>Бренд %</th>
+                <th>Usable</th>
+                <th>Статус</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for s in sources %}
+        <tr>
+            <td><strong>{{ s.source_name }}</strong></td>
+            <td class="muted" style="max-width:220px;word-break:break-all;">{{ s.source_url or "—" }}</td>
+            <td class="muted">{% if s.last_loaded_at %}{{ s.last_loaded_at.strftime("%d.%m %H:%M") }}{% else %}—{% endif %}</td>
+            <td>{{ s.total_rows or 0 }}</td>
+            <td>{% if s.vendor_code_pct is not none %}{{ "%.0f"|format(s.vendor_code_pct) }}{% else %}—{% endif %}</td>
+            <td>{% if s.barcode_pct is not none %}{{ "%.0f"|format(s.barcode_pct) }}{% else %}—{% endif %}</td>
+            <td>{% if s.brand_pct is not none %}{{ "%.0f"|format(s.brand_pct) }}{% else %}—{% endif %}</td>
+            <td>{% if s.usable_score is not none %}{{ "%.2f"|format(s.usable_score) }}{% else %}—{% endif %}</td>
+            <td>
+                {% if s.usable_score is not none and s.usable_score < 0.5 %}
+                <span class="badge badge-warning">Low</span>
+                {% else %}
+                <span class="badge badge-success">OK</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state"><p>Нет записей source_health — сначала запустите collector.</p></div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -24,6 +24,14 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.analytics.canonical_sync import rebuild_canonical_from_normalized
+from app.collectors.complect_service import fetch_complect_offers
+from app.collectors.normalized_io import (
+    replace_normalized_offers,
+    upsert_source_health,
+)
+from app.collectors.syperopt import fetch_syperopt_offers
+from app.collectors.xls_common import iter_xls_tdm_rows
 from app.database import get_engine, init_db, get_session, ExchangeRate, Product
 from app.matching.text import normalize_name_for_search
 from app.price_history_util import record_price_change
@@ -37,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Константы для источников данных
 CBR_API_URL = "http://www.cbr.ru/scripts/XML_daily.asp"
-FAKESTORE_API_URL = "https://fakestoreapi.com/products"
+FAKESTORE_API_URL = "https://fakestoreapi.com/products"  # не используем в демо-контуре (см. ENABLE_FAKESTORE)
 TBM_MARKET_YML_URL = "https://www.tbmmarket.ru/tbmmarket/service/yandex-market.xml"
 GALACENTRE_YML_URL = "https://www.galacentre.ru/download/yml/yml.xml"
 TDM_PRICE_XLS_URL = "https://tdme.ru/download/priceTDM.xls"
@@ -584,6 +592,7 @@ def fetch_ekf_goods(session) -> None:
 
         response = _fetch_yml_stream(EKF_YML_URL, timeout=(10, 180))
         saved_count = 0
+        norm_rows: list[dict[str, Any]] = []
 
         context = etree.iterparse(
             response.raw,
@@ -622,6 +631,17 @@ def fetch_ekf_goods(session) -> None:
                     session, stmt, external_id=external_id, source_shop="EKF"
                 )
                 saved_count += 1
+                norm_rows.append(
+                    {
+                        "name": row["name"],
+                        "price_rub": row["price_in_rub"],
+                        "vendor_code": row["vendor_code"],
+                        "barcode": row["barcode"],
+                        "category": row.get("category_id"),
+                        "url": row.get("url"),
+                        "external_id": external_id,
+                    }
+                )
 
             except (ValueError, TypeError, AttributeError) as e:
                 logger.warning(f"⚠️ Ошибка обработки товара EKF {offer_id}: {e}")
@@ -629,6 +649,10 @@ def fetch_ekf_goods(session) -> None:
                 _clear_parsed_offer(offer_elem)
 
         del context
+        replace_normalized_offers(
+            session, "EKF YML", EKF_YML_URL, norm_rows, loaded_at=None
+        )
+        upsert_source_health(session, "EKF YML", EKF_YML_URL, norm_rows)
         session.commit()
         logger.info(f"✅ Успешно сохранено товаров от EKF: {saved_count}")
 
@@ -701,6 +725,17 @@ def fetch_tdm_goods_from_xls(session) -> None:
             except (ValueError, TypeError) as e:
                 logger.warning(f"⚠️ Ошибка обработки строки XLS TDM #{r}: {e}")
 
+        tdm_norm: list[dict[str, Any]] = []
+        for i, d in enumerate(iter_xls_tdm_rows(sheet)):
+            nd = dict(d)
+            nd["external_id"] = f"tdm_{i}"
+            tdm_norm.append(nd)
+        replace_normalized_offers(
+            session, "TDM Electric", TDM_PRICE_XLS_URL, tdm_norm, loaded_at=None
+        )
+        upsert_source_health(
+            session, "TDM Electric", TDM_PRICE_XLS_URL, tdm_norm
+        )
         session.commit()
         logger.info(f"✅ Успешно сохранено {saved} товаров от TDM Electric (XLS)")
 
@@ -1091,9 +1126,12 @@ def collect_all_data(session) -> None:
     
     # Шаг 1: Курсы валют (критически важно для следующих шагов)
     fetch_currency(session)
-    
-    # Шаг 2: Зарубежные товары (оставляем для понта/задела)
-    fetch_foreign_goods(session)
+
+    # Шаг 2: FakeStore — только по ENABLE_FAKESTORE=1 (не в демо-контуре)
+    if os.getenv("ENABLE_FAKESTORE", "").strip().lower() in ("1", "true", "yes"):
+        fetch_foreign_goods(session)
+    else:
+        logger.info("⏭️ FakeStore пропущен (включите ENABLE_FAKESTORE=1 при необходимости)")
 
     # Шаг 3: Российские товары (TBM)
     fetch_russian_goods(session)
@@ -1106,6 +1144,16 @@ def collect_all_data(session) -> None:
 
     # Шаг 6: TDM Electric (XLS)
     fetch_tdm_goods_from_xls(session)
+
+    # Шаг 7–8: Complect, Syperopt -> normalized_offers
+    fetch_complect_offers(session)
+    fetch_syperopt_offers(session)
+
+    # Канонизация (мультиисточник по артикулу)
+    try:
+        rebuild_canonical_from_normalized(session)
+    except (SQLAlchemyError, ValueError, OSError) as e:
+        logger.error("canonical sync: %s", e)
     
     logger.info("=" * 60)
     logger.info("✅ Цикл сбора данных завершен")

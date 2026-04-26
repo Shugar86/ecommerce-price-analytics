@@ -1,6 +1,6 @@
 # Микросервисное приложение сбора и визуального анализа цен (e-commerce)
 
-Проект подходит для **ВКР / отчёта по практике**: микросервисная архитектура (Docker), **веб-приложение аналитика** (основной интерфейс), **воркер аналитики** (аномалии цен, **кандидаты** пересечения наименований по TF‑IDF в связке EKF↔TDM, простой прогноз), Telegram-бот (дополнительный канал).
+Проект подходит для **ВКР / отчёта по практике**: микросервисная архитектура (Docker), **веб-приложение аналитика** (основной интерфейс), **сборщик** с нормализованным слоем `normalized_offers` и **price intelligence** (рынок, индекс цены, floor-маржа), **воркер аналитики** (аномалии цен, **кандидаты** наименований по TF‑IDF EKF↔TDM, простой прогноз), Telegram-бот (дополнительный канал).
 
 **Сопоставление товаров между магазинами** в репозитории реализовано как **подсказки по сходству названий** и **точные пересечения ключей** (дашборд: полнота полей и overlap по `barcode` / `vendor_code` / `name_norm`), с возможностью **подтвердить или отклонить** кандидат в веб-интерфейсе. Это **не** система гарантированного глобального сопоставления каталогов; см. **[docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md)**.
 
@@ -28,10 +28,13 @@ SEED_DEMO_HISTORY=1
 AI_WORKER_INTERVAL_SEC=300
 # Порог TF‑IDF EKF↔TDM (кандидаты, см. docs/PRODUCT_SCOPE.md); по умолчанию 0.45
 # AI_MATCH_MIN_SCORE=0.45
+# Источник, считающийся «нашим» в KPI market position (норм. слой)
+# OUR_PRICING_SOURCE=EKF YML
+# FakeStore (демо) выключен по умолчанию; включение: ENABLE_FAKESTORE=1
 # Доп. переменные: [env.example](env.example) (SHOP_ITEM_LIMIT, AI_MATCH_LIMIT_PER_SHOP, …)
 ```
 
-После обновления кода с миграциями схема БД подтягивается при старте (`init_db` → Alembic). Файл **`alembic/versions/002_match_governance.py`** добавляет поля `match_kind` / `match_status` в `product_matches` для существующих инсталляций.
+После обновления кода с миграциями схема БД подтягивается при старте (`init_db` → Alembic). **003** (`alembic/versions/003_price_intelligence_layer.py`) добавляет `normalized_offers`, `canonical_products`, `source_health`. **002** — поля `match_kind` / `match_status` в `product_matches`.
 
 ### 3. Запуск
 
@@ -67,7 +70,14 @@ docker compose logs -f collector
 docker compose logs -f ai_worker
 ```
 
-В браузере: **http://localhost:8000** — дашборд, товары, аномалии, сопоставления, выгрузки CSV.
+В браузере: **http://localhost:8000** — **«Сегодня»** (сигналы KPI, источники, ревью), **рынок** (`/market`), **источники** (`/sources`), товары, **алерты** (`/alerts`, бывш. аномалии), сопоставления, выгрузки CSV.
+
+**Аудит прайс-файлов** (покрытие price/vendor_code/barcode, `usable_score`) в CSV:
+
+```bash
+.venv/bin/python -m app.tools.source_audit
+# → source_audit.csv в текущем каталоге; путь: SOURCE_AUDIT_OUT=путь/к/файлу
+```
 
 ### 5. Тесты (локально)
 

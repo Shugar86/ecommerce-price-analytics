@@ -1,59 +1,121 @@
 {% extends "base.html" %}
 {% block title %}Сопоставление номенклатуры{% endblock %}
 {% block content %}
-<div class="card">
-    <p class="muted" style="margin-top:0;">
-        <strong>Кандидаты</strong> по сходству наименований (TF‑IDF, косинусная близость) для пары
-        <span class="badge">EKF</span> ↔ <span class="badge">TDM Electric</span> — это <em>не</em> гарантия одного товара.
-        Подтверждайте или отклоняйте пары вручную. Порог и объём: переменные <code>AI_MATCH_MIN_SCORE</code>, <code>AI_MATCH_LIMIT_PER_SHOP</code> в <code>app/ai_worker.py</code> / <code>env.example</code>.
-    </p>
+
+<div class="page-header">
+    <h1>Ассистент сопоставления</h1>
+    <div class="page-subtitle">
+        Кандидаты вычислены по косинусному сходству TF-IDF наименований (пара EKF ↔ TDM Electric).
+        Сходство по названию — подсказка, не гарантия. Подтверждайте или отклоняйте вручную.
+    </div>
 </div>
 
+{# ─── Stats row ─── #}
+<div class="card">
+    <div class="stats-row">
+        <div class="sr-item">
+            <span class="sr-num">{{ pairs|length }}</span>
+            <span class="sr-lbl">всего загружено</span>
+        </div>
+        <div class="sr-item">
+            <span class="sr-num" style="color:var(--accent)">{{ suggested_n }}</span>
+            <span class="sr-lbl">ожидают ревью</span>
+        </div>
+        <div class="sr-item">
+            <span class="sr-num" style="color:var(--success)">{{ confirmed_n }}</span>
+            <span class="sr-lbl">подтверждено</span>
+        </div>
+        <div class="sr-item">
+            <span class="sr-num" style="color:var(--muted)">{{ rejected_n }}</span>
+            <span class="sr-lbl">отклонено</span>
+        </div>
+    </div>
+
+    {# filter tabs #}
+    {% if pairs %}
+    <hr class="divider">
+    <div class="filter-tabs" id="filterTabs">
+        <button type="button" class="filter-tab ft-active" data-filter="all">Все</button>
+        <button type="button" class="filter-tab" data-filter="suggested">Ожидают ревью</button>
+        <button type="button" class="filter-tab" data-filter="confirmed">Подтверждённые</button>
+        <button type="button" class="filter-tab" data-filter="rejected">Отклонённые</button>
+    </div>
+    {% endif %}
+</div>
+
+{# ─── Pairs table ─── #}
 <div class="card">
     {% if pairs %}
-    <table>
+    <table id="matchesTable">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Score</th>
-                <th>Тип / статус</th>
-                <th>Товар A</th>
-                <th>Товар B</th>
-                <th>Метод</th>
-                <th>Ревью</th>
+                <th style="width:90px">Уверенность</th>
+                <th>Товар A (EKF)</th>
+                <th>Товар B (TDM Electric)</th>
+                <th style="width:110px">Статус</th>
+                <th style="width:120px">Ревью</th>
             </tr>
         </thead>
         <tbody>
         {% for m in pairs %}
             {% set pa = products.get(m.product_low_id) %}
             {% set pb = products.get(m.product_high_id) %}
-        <tr>
-            <td class="muted">{{ m.id }}</td>
-            <td>{{ "%.3f"|format(m.score) }}</td>
-            <td><span class="badge">{{ m.match_kind }}</span> <span class="badge">{{ m.match_status }}</span></td>
+            {% if m.score >= 0.7 %}
+                {% set conf_cls = "high" %}
+                {% set conf_label = "Высокая" %}
+                {% set badge_cls = "badge-success" %}
+            {% elif m.score >= 0.5 %}
+                {% set conf_cls = "medium" %}
+                {% set conf_label = "Средняя" %}
+                {% set badge_cls = "badge-warning" %}
+            {% else %}
+                {% set conf_cls = "low" %}
+                {% set conf_label = "Низкая" %}
+                {% set badge_cls = "" %}
+            {% endif %}
+            {% if m.match_status == "suggested" %}
+                {% set status_badge = "badge-info" %}
+                {% set status_label = "Ожидает" %}
+            {% elif m.match_status == "confirmed" %}
+                {% set status_badge = "badge-success" %}
+                {% set status_label = "Подтверждено" %}
+            {% else %}
+                {% set status_badge = "" %}
+                {% set status_label = "Отклонено" %}
+            {% endif %}
+        <tr data-status="{{ m.match_status }}">
+            <td>
+                <span class="conf-pip conf-{{ conf_cls }}"></span>
+                <span class="{{ badge_cls }} badge" style="font-size:0.72rem">{{ conf_label }}</span>
+                <div class="muted" style="font-size:0.75rem;margin-top:2px;">{{ "%.3f"|format(m.score) }}</div>
+            </td>
             <td>
                 {% if pa %}
-                <a class="row-link" href="/products/{{ pa.id }}">{{ pa.name[:70] }}</a>
-                <span class="badge">{{ pa.source_shop }}</span>
-                {% else %}#{{ m.product_low_id }}{% endif %}
+                <a class="row-link" href="/products/{{ pa.id }}">{{ pa.name[:80] }}{% if pa.name|length > 80 %}…{% endif %}</a>
+                {% else %}
+                <span class="muted">#{{ m.product_low_id }}</span>
+                {% endif %}
             </td>
             <td>
                 {% if pb %}
-                <a class="row-link" href="/products/{{ pb.id }}">{{ pb.name[:70] }}</a>
-                <span class="badge">{{ pb.source_shop }}</span>
-                {% else %}#{{ m.product_high_id }}{% endif %}
+                <a class="row-link" href="/products/{{ pb.id }}">{{ pb.name[:80] }}{% if pb.name|length > 80 %}…{% endif %}</a>
+                {% else %}
+                <span class="muted">#{{ m.product_high_id }}</span>
+                {% endif %}
             </td>
-            <td>{{ m.method }}</td>
+            <td><span class="badge {{ status_badge }}">{{ status_label }}</span></td>
             <td>
                 {% if m.match_status == "suggested" %}
-                <form method="post" action="/matches/{{ m.id }}/status" style="display:inline;">
-                    <input type="hidden" name="status" value="confirmed" />
-                    <button type="submit" title="Подтвердить">ОК</button>
-                </form>
-                <form method="post" action="/matches/{{ m.id }}/status" style="display:inline;">
-                    <input type="hidden" name="status" value="rejected" />
-                    <button type="submit" title="Отклонить" style="background:#5c6b7d;border-color:#5c6b7d;">✕</button>
-                </form>
+                <div style="display:flex;gap:0.4rem;">
+                    <form method="post" action="/matches/{{ m.id }}/status" style="display:contents;">
+                        <input type="hidden" name="status" value="confirmed" />
+                        <button type="submit" class="btn btn-confirm btn-sm" title="Подтвердить">✓ Да</button>
+                    </form>
+                    <form method="post" action="/matches/{{ m.id }}/status" style="display:contents;">
+                        <input type="hidden" name="status" value="rejected" />
+                        <button type="submit" class="btn btn-reject btn-sm" title="Отклонить">✕ Нет</button>
+                    </form>
+                </div>
                 {% else %}
                 <span class="muted">—</span>
                 {% endif %}
@@ -63,7 +125,35 @@
         </tbody>
     </table>
     {% else %}
-    <p class="muted">Кандидатов нет. Запустите ИИ-воркер при наличии товаров EKF и TDM Electric (см. docs/PRODUCT_SCOPE.md).</p>
+    <div class="empty-state">
+        <div class="empty-icon">🔍</div>
+        <p><strong>Кандидатов нет.</strong></p>
+        <p>Воркер сопоставлений вычисляет кандидаты при наличии товаров EKF и TDM Electric.</p>
+        <p>Порог схожести: <code>AI_MATCH_MIN_SCORE</code> (по умолчанию 0.45).</p>
+    </div>
     {% endif %}
 </div>
+
+{% if pairs %}
+<script>
+(function () {
+    const tabs  = document.querySelectorAll('#filterTabs .filter-tab');
+    const rows  = document.querySelectorAll('#matchesTable tbody tr');
+
+    function applyFilter(filter) {
+        rows.forEach(function (row) {
+            const status = row.dataset.status;
+            row.style.display = (filter === 'all' || status === filter) ? '' : 'none';
+        });
+        tabs.forEach(function (t) {
+            t.classList.toggle('ft-active', t.dataset.filter === filter);
+        });
+    }
+
+    tabs.forEach(function (tab) {
+        tab.addEventListener('click', function () { applyFilter(tab.dataset.filter); });
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

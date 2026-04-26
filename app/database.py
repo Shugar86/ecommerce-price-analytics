@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Float,
     DateTime,
+    Boolean,
     ForeignKey,
     UniqueConstraint,
     create_engine,
@@ -237,6 +238,109 @@ class PriceForecast(Base):
     method: Mapped[str] = mapped_column(String(64), nullable=False)
     forecast_for: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+# --- Price intelligence: normalized layer + canonical catalog (see Alembic 003) ---
+
+
+class CanonicalProduct(Base):
+    """
+    Единая карточка товара для сопоставления офферов из разных источников.
+
+    Attributes:
+        id: Первичный ключ.
+        canonical_name: Согласованное наименование.
+        brand: Бренд.
+        vendor_code: Артикул / код производителя.
+        barcode: Штрихкод.
+        category: Категория.
+        match_confidence: Уверенность в связке (1.0 — exact barcode, и т.д.).
+        created_at: Время создания записи.
+    """
+
+    __tablename__ = "canonical_products"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    canonical_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    brand: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    vendor_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    barcode: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    match_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+    offers: Mapped[list["NormalizedOffer"]] = relationship(
+        "NormalizedOffer", back_populates="canonical_product"
+    )
+
+
+class SourceHealth(Base):
+    """
+    Метрики покрытия и актуальности источника для gate KPI.
+
+    Attributes:
+        id: Первичный ключ.
+        source_name: Уникальное имя источника.
+        last_loaded_at: Когда последний раз успешно загрузили данные.
+        total_rows: Число строк (офферов) в последней загрузке.
+        price_pct: Доля строк с ценой.
+        vendor_code_pct: Доля с артикулом.
+        barcode_pct: Доля со штрихкодом.
+        brand_pct: Доля с брендом.
+        usable_score: Взвешенный score для участия в рыночных KPI.
+        source_url: URL фида (для UI).
+        updated_at: Время обновления записи.
+    """
+
+    __tablename__ = "source_health"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    last_loaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    total_rows: Mapped[Optional[int]] = mapped_column(nullable=True)
+    price_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    vendor_code_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    barcode_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    brand_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    usable_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class NormalizedOffer(Base):
+    """
+    Нормализованный оффер после парсера (до/после привязки к canonical).
+    """
+
+    __tablename__ = "normalized_offers"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    brand: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    vendor_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    barcode: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    price_rub: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    availability: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    loaded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    canonical_product: Mapped[Optional["CanonicalProduct"]] = relationship(
+        "CanonicalProduct", back_populates="offers"
+    )
 
 
 def get_database_url() -> str:

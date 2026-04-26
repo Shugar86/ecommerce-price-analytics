@@ -38,7 +38,11 @@ from app.database import (
     get_session,
     init_db,
 )
-from app.web.services import build_dashboard_template_context
+from app.analytics.price_intelligence import load_market_rows, our_pricing_source
+from app.web.services import (
+    build_dashboard_template_context,
+    list_source_health_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +125,11 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Аналитика цен e-commerce",
+    title="PriceDesk — ценовая аналитика e-commerce",
     description=(
-        "Сбор прайс-листов, дашборд и эвристики. Сопоставления по TF-IDF — "
-        "кандидаты для просмотра, не гарантия одной сущности товара (см. docs/PRODUCT_SCOPE.md)."
+        "Мониторинг прайс-листов, история цен, эвристики аномалий и ассистированное сопоставление "
+        "позиций по TF-IDF. Кандидаты сопоставления — подсказки для аналитика, не автоматическое "
+        "объединение каталогов (см. docs/PRODUCT_SCOPE.md)."
     ),
     version="1.0.0",
     lifespan=_lifespan,
@@ -266,25 +271,61 @@ def product_detail(
     )
 
 
-@router.get("/anomalies", response_class=HTMLResponse)
-def anomalies_page(request: Request, session: SessionDep) -> HTMLResponse:
-    """Таблица аномалий (результат ИИ-воркера)."""
+@router.get("/anomalies", response_class=RedirectResponse)
+def anomalies_alias() -> RedirectResponse:
+    """Совместимость: /anomalies → /alerts."""
+    return RedirectResponse(url="/alerts", status_code=307)
+
+
+@router.get("/alerts", response_class=HTMLResponse)
+def alerts_page(request: Request, session: SessionDep) -> HTMLResponse:
+    """Таблица ценовых алертов (аномалии; воркер эвристик)."""
     rows = session.execute(
         select(PriceAnomaly, Product)
         .join(Product, Product.id == PriceAnomaly.product_id)
         .order_by(PriceAnomaly.detected_at.desc())
         .limit(300)
     ).all()
+    type_counts: dict[str, int] = {}
+    for a, _ in rows:
+        type_counts[a.anomaly_type] = type_counts.get(a.anomaly_type, 0) + 1
     return templates.TemplateResponse(
         request,
-        "anomalies.html",
-        {"rows": rows},
+        "alerts.html",
+        {"rows": rows, "type_counts": type_counts},
+    )
+
+
+@router.get("/market", response_class=HTMLResponse)
+def market_page(request: Request, session: SessionDep) -> HTMLResponse:
+    """Таблица market position (canonical + KPI)."""
+    rows = load_market_rows(
+        session, limit=500, our_src=our_pricing_source()
+    )
+    return templates.TemplateResponse(
+        request,
+        "market.html",
+        {
+            "rows": rows,
+            "our_pricing_source": our_pricing_source(),
+        },
+    )
+
+
+@router.get("/sources", response_class=HTMLResponse)
+def sources_page(request: Request, session: SessionDep) -> HTMLResponse:
+    """Реестр источников и source_health."""
+    sh_rows = list_source_health_rows(session)
+    return templates.TemplateResponse(
+        request,
+        "sources.html",
+        {"sources": sh_rows},
     )
 
 
 @router.get("/matches", response_class=HTMLResponse)
 def matches_page(request: Request, session: SessionDep) -> HTMLResponse:
-    """Кандидаты сопоставления (TF-IDF) и их статус ревью."""
+    """Ассистент сопоставления: кандидаты TF-IDF и их статус ревью."""
     pairs = session.execute(
         select(ProductMatch).order_by(ProductMatch.score.desc()).limit(200)
     ).scalars().all()
@@ -295,10 +336,19 @@ def matches_page(request: Request, session: SessionDep) -> HTMLResponse:
                 p = session.get(Product, pid)
                 if p:
                     products[pid] = p
+    suggested_n = sum(1 for m in pairs if m.match_status == MATCH_STATUS_SUGGESTED)
+    confirmed_n = sum(1 for m in pairs if m.match_status == MATCH_STATUS_CONFIRMED)
+    rejected_n = sum(1 for m in pairs if m.match_status == MATCH_STATUS_REJECTED)
     return templates.TemplateResponse(
         request,
         "matches.html",
-        {"pairs": pairs, "products": products},
+        {
+            "pairs": pairs,
+            "products": products,
+            "suggested_n": suggested_n,
+            "confirmed_n": confirmed_n,
+            "rejected_n": rejected_n,
+        },
     )
 
 

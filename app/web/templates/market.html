@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Позиция на рынке — Price Intelligence{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>Позиция на рынке</h1>
+    <div class="page-subtitle">
+        «Наш» источник: <code>{{ our_pricing_source }}</code> (переменная <code>OUR_PRICING_SOURCE</code>).
+        Медиана и индекс по всем пригодным по KPI офферам (usable_score источника).
+    </div>
+</div>
+
+<div class="card">
+    {% if rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Артикул</th>
+                <th>Бренд</th>
+                <th>Наименование</th>
+                <th>Наша цена</th>
+                <th>Market median</th>
+                <th>Price index</th>
+                <th>Позиция</th>
+                <th>Действие</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+        <tr>
+            <td>{{ r.canonical_id }}</td>
+            <td>{{ r.vendor_code or "—" }}</td>
+            <td>{{ r.brand or "—" }}</td>
+            <td>{{ (r.name or "—")[:64] }}{% if r.name and r.name|length > 64 %}…{% endif %}</td>
+            <td>{% if r.our_price %}{{ "%.2f"|format(r.our_price) }}{% else %}—{% endif %}</td>
+            <td>{% if r.market_median %}{{ "%.2f"|format(r.market_median) }}{% else %}—{% endif %}</td>
+            <td>{% if r.price_index %}{{ "%.3f"|format(r.price_index) }}{% else %}—{% endif %}</td>
+            <td><span class="badge">{{ r.position_label }}</span></td>
+            <td><span class="badge badge-info">{{ r.action }}</span></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>Нет строк с полными KPI: нужен collector (normalized + canonical) и 2+ цены в группе.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

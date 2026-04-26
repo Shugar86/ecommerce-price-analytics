@@ -1,50 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Товары{% endblock %}
 {% block content %}
+
+<div class="page-header">
+    <h1>Каталог товаров</h1>
+</div>
+
 <div class="card">
-    <form method="get" action="/products" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
-        <label class="muted">Поиск</label>
-        <input type="text" name="q" value="{{ q }}" placeholder="например e27 e40" maxlength="200">
-        <label class="muted">Источник</label>
+    <form method="get" action="/products" class="form-row">
+        <label class="form-label">Поиск</label>
+        <input type="text" name="q" value="{{ q }}" placeholder="например e27 e40 автомат" maxlength="200" style="min-width:220px;">
+        <label class="form-label">Источник</label>
         <select name="shop">
-            <option value="">Все</option>
+            <option value="">Все источники</option>
             {% for s in shops %}
             <option value="{{ s }}" {% if shop == s %}selected{% endif %}>{{ s }}</option>
             {% endfor %}
         </select>
-        <button type="submit">Найти</button>
-        <a class="row-link" href="/export/products.csv?q={{ q|urlencode }}&shop={{ shop|urlencode }}">CSV</a>
+        <button type="submit" class="btn btn-primary">Найти</button>
+        <a class="btn btn-ghost btn-sm" href="/export/products.csv?q={{ q|urlencode }}&shop={{ shop|urlencode }}">CSV</a>
     </form>
 </div>
 
 <div class="card">
-    <p class="muted" style="margin-top:0;">
-        Найдено: показано <strong>{{ products|length }}</strong> из <strong>{{ total_matching }}</strong>
-        {% if total_matching > products|length %} (лимит списка 200){% endif %}
-    </p>
     {% if products %}
+    <div class="card-header" style="margin-bottom:0.75rem;">
+        <span class="muted">
+            Показано <strong style="color:var(--text)">{{ products|length }}</strong>
+            из <strong style="color:var(--text)">{{ total_matching }}</strong>
+            {% if total_matching > products|length %} (лимит списка 200){% endif %}
+        </span>
+    </div>
     <table>
         <thead>
             <tr>
-                <th>ID</th>
+                <th style="width:55px">ID</th>
                 <th>Название</th>
-                <th>Цена ₽</th>
-                <th>Источник</th>
+                <th style="width:110px">Цена, ₽</th>
+                <th style="width:130px">Источник</th>
             </tr>
         </thead>
         <tbody>
         {% for p in products %}
-            <tr>
-                <td><a class="row-link" href="/products/{{ p.id }}">{{ p.id }}</a></td>
-                <td>{{ p.name[:120] }}{% if p.name|length > 120 %}…{% endif %}</td>
-                <td>{{ "%.2f"|format(p.price_in_rub) }}</td>
-                <td><span class="badge">{{ p.source_shop }}</span></td>
-            </tr>
+        <tr>
+            <td><a class="row-link" href="/products/{{ p.id }}">{{ p.id }}</a></td>
+            <td>
+                <a class="row-link" href="/products/{{ p.id }}">
+                    {{ p.name[:120] }}{% if p.name|length > 120 %}…{% endif %}
+                </a>
+            </td>
+            <td>{{ "%.2f"|format(p.price_in_rub) }}</td>
+            <td><span class="badge">{{ p.source_shop }}</span></td>
+        </tr>
         {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <p class="muted">Ничего не найдено. Проверьте запрос или загрузку данных.</p>
+    <div class="empty-state">
+        <div class="empty-icon">🔎</div>
+        <p><strong>Ничего не найдено.</strong></p>
+        <p>Проверьте поисковый запрос или дождитесь загрузки данных collector.</p>
+    </div>
     {% endif %}
 </div>
 {% endblock %}

@@ -4,74 +4,115 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 {% endblock %}
 {% block content %}
+
+{# ─── Product card ─── #}
 <div class="card">
-    <h2 style="margin-top:0;font-size:1.1rem;">{{ product.name }}</h2>
-    <p class="muted">
-        <span class="badge">{{ product.source_shop }}</span>
-        ID {{ product.id }} · external_id {{ product.external_id }}
-    </p>
-    <p><strong>Цена:</strong> {{ "%.2f"|format(product.price_in_rub) }} ₽
-        {% if product.currency != 'RUB' %}({{ "%.2f"|format(product.price_original) }} {{ product.currency }}){% endif %}
-    </p>
-    {% if product.url %}
-    <p><a class="row-link" href="{{ product.url }}" target="_blank" rel="noopener">Ссылка на товар</a></p>
-    {% endif %}
+    <div class="card-header">
+        <div>
+            <span class="badge" style="margin-bottom:0.4rem">{{ product.source_shop }}</span>
+            <h2 style="font-size:1.05rem;font-weight:600;margin-top:0.25rem;">{{ product.name }}</h2>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="/products">← К списку</a>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin-top:0.5rem;">
+        <div>
+            <div class="kpi-label">Текущая цена</div>
+            <div style="font-size:1.5rem;font-weight:700;color:var(--accent)">
+                {{ "%.2f"|format(product.price_in_rub) }} ₽
+            </div>
+            {% if product.currency not in ("RUB", "RUR") %}
+            <div class="muted">{{ "%.2f"|format(product.price_original) }} {{ product.currency }}</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="kpi-label">ID / external</div>
+            <div class="muted">#{{ product.id }} · {{ product.external_id }}</div>
+        </div>
+        {% if product.url %}
+        <div>
+            <div class="kpi-label">Ссылка</div>
+            <a class="row-link" href="{{ product.url }}" target="_blank" rel="noopener">Открыть на сайте →</a>
+        </div>
+        {% endif %}
+    </div>
 </div>
 
+{# ─── Price history chart ─── #}
 {% if chart_values_json != "[]" %}
 <div class="card">
-    <h3 style="margin-top:0;font-size:1rem;">Динамика цены (история)</h3>
+    <div class="card-title">Динамика цены</div>
     <canvas id="priceChart" height="100"></canvas>
 </div>
 <script>
-    const labels = {{ chart_labels_json|safe }};
-    const values = {{ chart_values_json|safe }};
-    const ctx = document.getElementById('priceChart');
-    new Chart(ctx, {
+    new Chart(document.getElementById('priceChart'), {
         type: 'line',
         data: {
-            labels,
+            labels: {{ chart_labels_json|safe }},
             datasets: [{
                 label: 'Цена, ₽',
-                data: values,
-                borderColor: '#3d8bfd',
-                backgroundColor: 'rgba(61,139,253,0.15)',
+                data: {{ chart_values_json|safe }},
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59,130,246,0.1)',
                 fill: true,
-                tension: 0.2,
+                tension: 0.25,
+                pointRadius: 4,
+                pointHoverRadius: 6,
             }]
         },
         options: {
-            plugins: { legend: { labels: { color: '#e7ecf3' } } },
+            plugins: { legend: { labels: { color: '#e6edf3', font: { size: 11 } } } },
             scales: {
-                x: { ticks: { color: '#8b9cb3', maxRotation: 45 } },
-                y: { ticks: { color: '#8b9cb3' } },
+                x: { ticks: { color: '#8b9cb3', maxRotation: 45, font: { size: 11 } }, grid: { color: 'rgba(139,156,179,0.18)' } },
+                y: { ticks: { color: '#8b9cb3', font: { size: 11 } }, grid: { color: 'rgba(139,156,179,0.18)' } },
             }
         }
     });
 </script>
 {% else %}
-<div class="card muted">История цен пока пуста. После нескольких циклов collector появятся точки; при SEED_DEMO_HISTORY=1 ИИ-воркер добавит демо-ряд.</div>
-{% endif %}
-
-{% if forecast %}
 <div class="card">
-    <h3 style="margin-top:0;font-size:1rem;">Прогноз (linear_trend)</h3>
-    <p>Ожидаемая цена: <strong>{{ "%.2f"|format(forecast.forecast_price_rub) }} ₽</strong>
-        к {{ forecast.forecast_for }} UTC</p>
+    <div class="empty-state">
+        <div class="empty-icon">📊</div>
+        <p>История цен пока пуста.</p>
+        <p>Появится после нескольких циклов collector; при <code>SEED_DEMO_HISTORY=1</code> воркер добавит демо-ряд.</p>
+    </div>
 </div>
 {% endif %}
 
+{# ─── Forecast ─── #}
+{% if forecast %}
+<div class="card">
+    <div class="card-title">Прогноз на следующий шаг</div>
+    <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;">
+        <div style="font-size:1.35rem;font-weight:700;color:var(--warning)">
+            {{ "%.2f"|format(forecast.forecast_price_rub) }} ₽
+        </div>
+        <div class="muted">на {{ forecast.forecast_for.strftime("%d.%m.%Y") }} UTC</div>
+    </div>
+    <p class="muted" style="margin-top:0.5rem;font-size:0.8rem;">
+        Линейный тренд по последним точкам истории. Ориентировочный расчёт; не является торговой рекомендацией.
+    </p>
+</div>
+{% endif %}
+
+{# ─── Anomalies ─── #}
 {% if anomalies %}
 <div class="card">
-    <h3 style="margin-top:0;font-size:1rem;">Аномалии по этому товару</h3>
+    <div class="card-title">Аномалии по этому товару</div>
     <table>
-        <thead><tr><th>Тип</th><th>Серьёзность</th><th>Детали</th></tr></thead>
+        <thead><tr><th>Тип</th><th>Степень</th><th>Описание</th></tr></thead>
         <tbody>
         {% for a in anomalies %}
+        {% if a.severity >= 0.6 %}{% set sev_cls = "badge-danger" %}{% set sev_label = "Высокая" %}
+        {% elif a.severity >= 0.3 %}{% set sev_cls = "badge-warning" %}{% set sev_label = "Средняя" %}
+        {% else %}{% set sev_cls = "" %}{% set sev_label = "Низкая" %}{% endif %}
+        {% if a.anomaly_type == "spike" %}{% set type_label = "Скачок цены" %}
+        {% elif a.anomaly_type == "fake_discount" %}{% set type_label = "Скидка после роста" %}
+        {% elif a.anomaly_type == "zscore_return" %}{% set type_label = "Z-отклонение" %}
+        {% else %}{% set type_label = a.anomaly_type %}{% endif %}
         <tr>
-            <td>{{ a.anomaly_type }}</td>
-            <td>{{ "%.3f"|format(a.severity) }}</td>
-            <td>{{ a.detail or "—" }}</td>
+            <td><span class="badge">{{ type_label }}</span></td>
+            <td><span class="badge {{ sev_cls }}">{{ sev_label }}</span></td>
+            <td class="muted">{{ a.detail or "—" }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -79,24 +120,35 @@
 </div>
 {% endif %}
 
+{# ─── Related matches ─── #}
 {% if matches %}
 <div class="card">
-    <h3 style="margin-top:0;font-size:1rem;">Связанные позиции (кандидаты / сопоставления)</h3>
-    <p class="muted" style="margin-top:0;">По сходству наименований (TF‑IDF) или после ревью. Отклонённые пары в список не попадают.</p>
+    <div class="card-title">Связанные позиции</div>
+    <p class="muted" style="margin-bottom:0.75rem;font-size:0.82rem;">
+        Кандидаты по сходству наименований (TF-IDF) или подтверждённые аналитиком. Отклонённые не показываются.
+    </p>
     <table>
-        <thead><tr><th>Score</th><th>Статус</th><th>Тип</th><th>Товар</th></tr></thead>
+        <thead><tr><th>Схожесть</th><th>Статус</th><th>Товар</th></tr></thead>
         <tbody>
         {% for m in matches %}
             {% set oid = m.product_high_id if m.product_low_id == product.id else m.product_low_id %}
             {% set op = match_products.get(oid) %}
+            {% if m.score >= 0.7 %}{% set conf_cls = "conf-high" %}
+            {% elif m.score >= 0.5 %}{% set conf_cls = "conf-medium" %}
+            {% else %}{% set conf_cls = "conf-low" %}{% endif %}
+            {% if m.match_status == "confirmed" %}{% set s_cls = "badge-success" %}{% set s_lbl = "Подтверждено" %}
+            {% elif m.match_status == "suggested" %}{% set s_cls = "badge-info" %}{% set s_lbl = "Кандидат" %}
+            {% else %}{% set s_cls = "" %}{% set s_lbl = m.match_status %}{% endif %}
             <tr>
-                <td>{{ "%.3f"|format(m.score) }}</td>
-                <td><span class="badge">{{ m.match_status }}</span></td>
-                <td class="muted">{{ m.match_kind }}</td>
+                <td>
+                    <span class="conf-pip {{ conf_cls }}"></span>
+                    {{ "%.3f"|format(m.score) }}
+                </td>
+                <td><span class="badge {{ s_cls }}">{{ s_lbl }}</span></td>
                 <td>
                     {% if op %}
                     <a class="row-link" href="/products/{{ op.id }}">{{ op.name[:100] }}</a>
-                    <span class="badge">{{ op.source_shop }}</span>
+                    <span class="badge" style="margin-left:4px">{{ op.source_shop }}</span>
                     {% else %}#{{ oid }}{% endif %}
                 </td>
             </tr>
@@ -106,5 +158,4 @@
 </div>
 {% endif %}
 
-<p><a class="row-link" href="/products">← К списку</a></p>
 {% endblock %}
