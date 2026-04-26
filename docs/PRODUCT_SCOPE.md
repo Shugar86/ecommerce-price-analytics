@@ -11,8 +11,9 @@
 ## Что система **делает**
 
 - Сбор и нормализация прайсов (`app/collector.py`, в т.ч. EKF, TDM, **Complect-Service**, **Syperopt**), запись в **`normalized_offers`** и обновление **`source_health`**. Устаревший контур `products` сохраняется на переходный период. **Price intelligence** (`app/analytics/price_intelligence.py`): mediana, **price index**, эвристика COGS и floor-маржи, рекомендуемое действие; UI: `/`, `/market`, `/sources`. **Сопоставление v2** (`app/ml/matching.py`): сначала штрихкод, brand+артикул, артикул+category, brand+модель; **TF‑IDF** — только кандидаты ручного ревью, не для автозакреплений. FakeStore **не** входит в демо-цикл (только `ENABLE_FAKESTORE=1`).
+- **Канонизация** (`app/analytics/canonical_sync.py`): кластеры офферов строятся только по **автоматическим** правилам `match_pair` (без fuzzy); при 2+ источниках создаётся `canonical_products`, поле `match_confidence` — максимум уверенности по парам в кластере. Опционально **обогащение** пустых brand/vendor из таблицы **`barcode_reference`** (Tier B; загрузка `python -m app.tools.load_barcode_reference`).
 - Исторически: история цен, аномалии, прогноз, сопоставления `products` (`product_matches`).
-- **Кандидаты** пересечения между **EKF** и **TDM Electric** на основе **TF‑IDF + косинус**, с порогом `AI_MATCH_MIN_SCORE` (по умолчанию **0.45**) и **жадным** выбором непересекающихся пар по сторонам A/B (`filter_greedy_one_to_one` в `app/ml/tfidf_pairs.py`). Записи в `product_matches` для этого контура помечаются `match_kind='fuzzy_tfidf'`, `match_status='suggested'`.
+- **Основная очередь ревью** — пары **`normalized_offers`** (`normalized_offer_matches`): fuzzy из `match_pair` между источниками `AI_MATCH_NORMALIZED_LEFT` / `RIGHT` (по умолчанию **EKF YML** ↔ **TDM Electric**). Legacy: **кандидаты** по таблице `products` (**EKF** ↔ **TDM Electric**) на **TF‑IDF + косинус** (`filter_greedy_one_to_one`), включаются только при **`USE_LEGACY_PRODUCT_MATCHING=1`**. Записи помечаются `match_kind='fuzzy_tfidf'`, `match_status='suggested'` до ревью.
 - Ручной **ревью** в веб-интерфейсе: кандидат может быть **подтверждён** или **отклонён**. Подтверждённые и отклонённые записи **не** пересчитываются при следующем цикле `ai_worker` (пересчитываются только `suggested` + `fuzzy_tfidf`).
 - На дашборде: **полнота** полей `barcode`, `vendor_code`, `category_id`, `name_norm` и **число точных пересечений** ключей между парами магазинов (см. `app/quality/coverage.py`, аналогично `python -m app.overlap_report`).
 
@@ -27,7 +28,10 @@
 
 | Кусок | Файл |
 |-------|------|
-| Цикл кандидатов | `app/ai_worker.py` |
+| Цикл кандидатов (офферы + опционально products) | `app/ai_worker.py` |
+| Очередь ревью по офферам | `normalized_offer_matches`, миграция `004` |
+| Справочник штрихкодов | `barcode_reference`, миграция `005`, `app/tools/load_barcode_reference.py` |
+| Канонизация по match_pair | `app/analytics/canonical_sync.py` |
 | TF‑IDF + greedy one-to-one | `app/ml/tfidf_pairs.py` |
 | Модель и константы `match_kind` / `match_status` | `app/database.py` |
 | Миграция 002 | `alembic/versions/002_match_governance.py` |

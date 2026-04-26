@@ -13,6 +13,7 @@ from app.database import (
     MATCH_STATUS_CONFIRMED,
     MATCH_STATUS_REJECTED,
     MATCH_STATUS_SUGGESTED,
+    NormalizedOfferMatch,
     PriceAnomaly,
     PriceHistory,
     Product,
@@ -54,14 +55,25 @@ def build_dashboard_template_context(session: Session) -> dict[str, Any]:
         )
     ).one()
     anomalies_n = session.scalar(select(func.count(PriceAnomaly.id))) or 0
-    matches_suggested_n = (
-        session.scalar(
-            select(func.count(ProductMatch.id)).where(
-                ProductMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
-                ProductMatch.match_status == MATCH_STATUS_SUGGESTED,
+    matches_suggested_n = int(
+        (
+            session.scalar(
+                select(func.count(NormalizedOfferMatch.id)).where(
+                    NormalizedOfferMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                    NormalizedOfferMatch.match_status == MATCH_STATUS_SUGGESTED,
+                )
             )
+            or 0
         )
-        or 0
+        + (
+            session.scalar(
+                select(func.count(ProductMatch.id)).where(
+                    ProductMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                    ProductMatch.match_status == MATCH_STATUS_SUGGESTED,
+                )
+            )
+            or 0
+        )
     )
     matches_confirmed_n = (
         session.scalar(

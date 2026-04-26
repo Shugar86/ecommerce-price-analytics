@@ -58,7 +58,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | `adminer`  | Веб-админка БД (порт 8080 только с `docker-compose.dev.yml`) |
 | `collector`| ETL, сбор прайсов |
 | `web`      | **Аналитика** → http://localhost:8000 |
-| `ai_worker`| Аномалии, кандидаты TF‑IDF (EKF↔TDM), прогнозы |
+| `ai_worker`| Аномалии, fuzzy-кандидаты по **normalized_offers** (EKF YML↔TDM), опционально legacy TF‑IDF по `products`, прогнозы |
 | `bot`      | Telegram-бот |
 
 ### 4. Проверка
@@ -113,6 +113,10 @@ python3 -m venv .venv
 ## Источники данных
 
 ЦБ РФ, FakeStore, TBM Market, GalaCentre, EKF (YML), TDM Electric (XLS) — см. `app/collector.py`.
+
+### Имена источников: `products` vs normalized layer
+
+В legacy-таблице `products` источник EKF хранится как **`EKF`**. В нормализованном слое (`normalized_offers`, KPI, `/market`) тот же фид называется **`EKF YML`** (см. `OUR_PRICING_SOURCE`, по умолчанию `EKF YML`). Воркер сопоставления офферов использует имена нормализованного слоя (`AI_MATCH_NORMALIZED_LEFT` / `RIGHT`).
 
 ## Документация
 

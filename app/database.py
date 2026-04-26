@@ -343,6 +343,62 @@ class NormalizedOffer(Base):
     )
 
 
+class NormalizedOfferMatch(Base):
+    """
+    Пара нормализованных офферов: fuzzy-кандидат (TF-IDF) или подтверждённый аналитиком.
+
+    Идентификаторы offer_low_id и offer_high_id упорядочены (low < high).
+    """
+
+    __tablename__ = "normalized_offer_matches"
+    __table_args__ = (
+        UniqueConstraint(
+            "offer_low_id",
+            "offer_high_id",
+            name="uq_normalized_offer_matches_pair",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    offer_low_id: Mapped[int] = mapped_column(
+        ForeignKey("normalized_offers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    offer_high_id: Mapped[int] = mapped_column(
+        ForeignKey("normalized_offers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    method: Mapped[str] = mapped_column(String(64), nullable=False)
+    match_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=MATCH_KIND_FUZZY_TFIDF
+    )
+    match_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=MATCH_STATUS_SUGGESTED
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class BarcodeReference(Base):
+    """
+    Справочник штрихкодов (внешний дамп) для обогащения brand/article.
+    """
+
+    __tablename__ = "barcode_reference"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    barcode: Mapped[str] = mapped_column(String(14), unique=True, nullable=False, index=True)
+    category: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    vendor: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    article: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_batch: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
 def get_database_url() -> str:
     """
     Собирает URL PostgreSQL с экранированием спецсимволов в учётных данных.

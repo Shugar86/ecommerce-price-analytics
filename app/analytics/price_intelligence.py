@@ -17,6 +17,7 @@ from app.database import (
     MATCH_STATUS_SUGGESTED,
     CanonicalProduct,
     NormalizedOffer,
+    NormalizedOfferMatch,
     ProductMatch,
     SourceHealth,
 )
@@ -278,7 +279,16 @@ def compute_today_action_counts(
         if pos.our_price and pos.floor_price and pos.our_price < pos.floor_price:
             floor_n += 1
 
-    pending_fuzzy = int(
+    pending_offer = int(
+        session.scalar(
+            select(func.count(NormalizedOfferMatch.id)).where(
+                NormalizedOfferMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                NormalizedOfferMatch.match_status == MATCH_STATUS_SUGGESTED,
+            )
+        )
+        or 0
+    )
+    pending_product = int(
         session.scalar(
             select(func.count(ProductMatch.id)).where(
                 ProductMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
@@ -287,6 +297,7 @@ def compute_today_action_counts(
         )
         or 0
     )
+    pending_fuzzy = pending_offer + pending_product
 
     # stale: source_health not updated 48h
     from datetime import datetime, timedelta

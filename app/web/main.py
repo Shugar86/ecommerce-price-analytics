@@ -28,6 +28,8 @@ from app.database import (
     MATCH_STATUS_CONFIRMED,
     MATCH_STATUS_REJECTED,
     MATCH_STATUS_SUGGESTED,
+    NormalizedOffer,
+    NormalizedOfferMatch,
     PriceAnomaly,
     PriceForecast,
     PriceHistory,
@@ -325,29 +327,73 @@ def sources_page(request: Request, session: SessionDep) -> HTMLResponse:
 
 @router.get("/matches", response_class=HTMLResponse)
 def matches_page(request: Request, session: SessionDep) -> HTMLResponse:
-    """Ассистент сопоставления: кандидаты TF-IDF и их статус ревью."""
-    pairs = session.execute(
+    """Ассистент сопоставления: кандидаты по normalized_offers (TF-IDF) и legacy Product."""
+    offer_pairs = session.execute(
+        select(NormalizedOfferMatch).order_by(NormalizedOfferMatch.score.desc()).limit(200)
+    ).scalars().all()
+    offer_ids: set[int] = set()
+    for m in offer_pairs:
+        offer_ids.add(int(m.offer_low_id))
+        offer_ids.add(int(m.offer_high_id))
+    offers_map: dict[int, NormalizedOffer] = {}
+    for oid in offer_ids:
+        o = session.get(NormalizedOffer, oid)
+        if o:
+            offers_map[oid] = o
+
+    offer_suggested_n = sum(
+        1 for m in offer_pairs if m.match_status == MATCH_STATUS_SUGGESTED
+    )
+    offer_confirmed_n = sum(
+        1 for m in offer_pairs if m.match_status == MATCH_STATUS_CONFIRMED
+    )
+    offer_rejected_n = sum(
+        1 for m in offer_pairs if m.match_status == MATCH_STATUS_REJECTED
+    )
+
+    legacy_pairs = session.execute(
         select(ProductMatch).order_by(ProductMatch.score.desc()).limit(200)
     ).scalars().all()
     products: dict[int, Product] = {}
-    for m in pairs:
+    for m in legacy_pairs:
         for pid in (m.product_low_id, m.product_high_id):
             if pid not in products:
                 p = session.get(Product, pid)
                 if p:
                     products[pid] = p
-    suggested_n = sum(1 for m in pairs if m.match_status == MATCH_STATUS_SUGGESTED)
-    confirmed_n = sum(1 for m in pairs if m.match_status == MATCH_STATUS_CONFIRMED)
-    rejected_n = sum(1 for m in pairs if m.match_status == MATCH_STATUS_REJECTED)
+    legacy_suggested_n = sum(
+        1 for m in legacy_pairs if m.match_status == MATCH_STATUS_SUGGESTED
+    )
+    legacy_confirmed_n = sum(
+        1 for m in legacy_pairs if m.match_status == MATCH_STATUS_CONFIRMED
+    )
+    legacy_rejected_n = sum(
+        1 for m in legacy_pairs if m.match_status == MATCH_STATUS_REJECTED
+    )
+
+    suggested_n = offer_suggested_n + legacy_suggested_n
+    confirmed_n = offer_confirmed_n + legacy_confirmed_n
+    rejected_n = offer_rejected_n + legacy_rejected_n
+
     return templates.TemplateResponse(
         request,
         "matches.html",
         {
-            "pairs": pairs,
+            "offer_pairs": offer_pairs,
+            "offers_map": offers_map,
+            "offer_suggested_n": offer_suggested_n,
+            "offer_confirmed_n": offer_confirmed_n,
+            "offer_rejected_n": offer_rejected_n,
+            "legacy_pairs": legacy_pairs,
             "products": products,
+            "legacy_suggested_n": legacy_suggested_n,
+            "legacy_confirmed_n": legacy_confirmed_n,
+            "legacy_rejected_n": legacy_rejected_n,
             "suggested_n": suggested_n,
             "confirmed_n": confirmed_n,
             "rejected_n": rejected_n,
+            "ai_match_left": os.getenv("AI_MATCH_NORMALIZED_LEFT", "EKF YML"),
+            "ai_match_right": os.getenv("AI_MATCH_NORMALIZED_RIGHT", "TDM Electric"),
         },
     )
 
@@ -358,10 +404,29 @@ def set_match_status(
     match_id: int,
     status: str = Form(...),
 ) -> RedirectResponse:
-    """Подтвердить или отклонить кандидат сопоставления (для аналитика)."""
+    """Подтвердить или отклонить кандидат сопоставления Product (legacy)."""
     if status not in (MATCH_STATUS_CONFIRMED, MATCH_STATUS_REJECTED):
         raise HTTPException(status_code=400, detail="status must be confirmed or rejected")
     row = session.get(ProductMatch, match_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    if row.match_status != MATCH_STATUS_SUGGESTED:
+        raise HTTPException(status_code=400, detail="only suggested candidates can be reviewed")
+    row.match_status = status
+    session.commit()
+    return RedirectResponse(url="/matches", status_code=303)
+
+
+@router.post("/matches/offers/{match_id}/status", response_class=RedirectResponse)
+def set_offer_match_status(
+    session: SessionDep,
+    match_id: int,
+    status: str = Form(...),
+) -> RedirectResponse:
+    """Подтвердить или отклонить кандидат по normalized_offers."""
+    if status not in (MATCH_STATUS_CONFIRMED, MATCH_STATUS_REJECTED):
+        raise HTTPException(status_code=400, detail="status must be confirmed or rejected")
+    row = session.get(NormalizedOfferMatch, match_id)
     if row is None:
         raise HTTPException(status_code=404, detail="match not found")
     if row.match_status != MATCH_STATUS_SUGGESTED:

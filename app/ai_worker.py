@@ -1,9 +1,8 @@
 """
-Аналитический воркер: периодический пересчёт аномалий цен, кандидатов TF-IDF и прогнозов.
+Аналитический воркер: периодический пересчёт аномалий цен, кандидатов сопоставления и прогнозов.
 
-Использует интерпретируемые эвристики (пороги) и косинусное сходство TF-IDF.
-Результаты — подсказки для аналитика, не автоматическое решение.
-Запускается отдельным контейнером. Пишет результаты в PostgreSQL.
+Основная очередь ревью — пары ``normalized_offers`` (TF-IDF из ``match_pair``, только fuzzy).
+Опционально: legacy TF-IDF по ``Product`` (EKF ↔ TDM), ``USE_LEGACY_PRODUCT_MATCHING=1``.
 """
 
 from __future__ import annotations
@@ -21,6 +20,8 @@ from sqlalchemy.orm import Session
 from app.database import (
     MATCH_KIND_FUZZY_TFIDF,
     MATCH_STATUS_SUGGESTED,
+    NormalizedOffer,
+    NormalizedOfferMatch,
     PriceAnomaly,
     PriceForecast,
     PriceHistory,
@@ -31,6 +32,7 @@ from app.database import (
     init_db,
 )
 from app.ml.anomalies import detect_price_anomalies
+from app.ml.matching import match_pair
 from app.ml.tfidf_pairs import filter_greedy_one_to_one, find_cross_shop_pairs
 
 logging.basicConfig(
@@ -45,6 +47,12 @@ MATCH_LIMIT_PER_SHOP = int(os.getenv("AI_MATCH_LIMIT_PER_SHOP", "500"))
 # Scope: EKF vs TDM Electric only; see docs/PRODUCT_SCOPE.md.
 AI_MATCH_MIN_SCORE = float(os.getenv("AI_MATCH_MIN_SCORE", "0.45"))
 FORECAST_MIN_POINTS = int(os.getenv("AI_FORECAST_MIN_POINTS", "5"))
+USE_LEGACY_PRODUCT_MATCHING = os.getenv(
+    "USE_LEGACY_PRODUCT_MATCHING", ""
+).strip().lower() in ("1", "true", "yes")
+AI_MATCH_NORMALIZED_LEFT = os.getenv("AI_MATCH_NORMALIZED_LEFT", "EKF YML")
+AI_MATCH_NORMALIZED_RIGHT = os.getenv("AI_MATCH_NORMALIZED_RIGHT", "TDM Electric")
+AI_MATCH_OFFER_CAP = int(os.getenv("AI_MATCH_OFFER_CAP", "400"))
 
 
 def _history_prices(session: Session, product_id: int, *, limit: int = 40) -> list[float]:
@@ -107,13 +115,22 @@ def run_ai_cycle() -> None:
         session.execute(delete(PriceAnomaly))
         # Only replace auto TF-IDF *suggestions*; keep analyst-confirmed/rejected rows.
         session.execute(
-            delete(ProductMatch).where(
+            delete(NormalizedOfferMatch).where(
                 and_(
-                    ProductMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
-                    ProductMatch.match_status == MATCH_STATUS_SUGGESTED,
+                    NormalizedOfferMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                    NormalizedOfferMatch.match_status == MATCH_STATUS_SUGGESTED,
                 )
             )
         )
+        if USE_LEGACY_PRODUCT_MATCHING:
+            session.execute(
+                delete(ProductMatch).where(
+                    and_(
+                        ProductMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                        ProductMatch.match_status == MATCH_STATUS_SUGGESTED,
+                    )
+                )
+            )
         session.execute(delete(PriceForecast))
 
         pids = session.execute(
@@ -139,44 +156,97 @@ def run_ai_cycle() -> None:
                     )
                 )
 
-        ekf_rows = session.execute(
-            select(Product.id, Product.name)
-            .where(Product.source_shop == "EKF")
+        left_offers = session.scalars(
+            select(NormalizedOffer)
+            .where(NormalizedOffer.source_name == AI_MATCH_NORMALIZED_LEFT)
+            .order_by(NormalizedOffer.id)
             .limit(MATCH_LIMIT_PER_SHOP)
         ).all()
-        tdm_rows = session.execute(
-            select(Product.id, Product.name)
-            .where(Product.source_shop == "TDM Electric")
+        right_offers = session.scalars(
+            select(NormalizedOffer)
+            .where(NormalizedOffer.source_name == AI_MATCH_NORMALIZED_RIGHT)
+            .order_by(NormalizedOffer.id)
             .limit(MATCH_LIMIT_PER_SHOP)
         ).all()
 
-        pairs_count = 0
-        if ekf_rows and tdm_rows:
-            names_a = [str(r[1]) for r in ekf_rows]
-            names_b = [str(r[1]) for r in tdm_rows]
-            ids_a = [int(r[0]) for r in ekf_rows]
-            ids_b = [int(r[0]) for r in tdm_rows]
-            raw = find_cross_shop_pairs(
-                names_a,
-                names_b,
-                min_score=AI_MATCH_MIN_SCORE,
-                max_pairs=2000,
-            )
-            one_to_one = filter_greedy_one_to_one(raw)[:400]
-            pairs_count = len(one_to_one)
-            for pair in one_to_one:
-                ia, ib = ids_a[pair.idx_a], ids_b[pair.idx_b]
-                low, high = (ia, ib) if ia < ib else (ib, ia)
+        existing_offer_pairs = {
+            (int(r[0]), int(r[1]))
+            for r in session.execute(
+                select(
+                    NormalizedOfferMatch.offer_low_id,
+                    NormalizedOfferMatch.offer_high_id,
+                )
+            ).all()
+        }
+
+        offer_pairs_count = 0
+        for a in left_offers:
+            for b in right_offers:
+                if a.id == b.id:
+                    continue
+                res = match_pair(a, b)
+                if res is None or res.is_automated:
+                    continue
+                lo, hi = (int(a.id), int(b.id)) if a.id < b.id else (int(b.id), int(a.id))
+                if (lo, hi) in existing_offer_pairs:
+                    continue
                 session.add(
-                    ProductMatch(
-                        product_low_id=low,
-                        product_high_id=high,
-                        score=pair.score,
+                    NormalizedOfferMatch(
+                        offer_low_id=lo,
+                        offer_high_id=hi,
+                        score=float(res.confidence),
                         method="tfidf_cosine",
-                        match_kind=MATCH_KIND_FUZZY_TFIDF,
+                        match_kind=res.kind,
                         match_status=MATCH_STATUS_SUGGESTED,
                     )
                 )
+                existing_offer_pairs.add((lo, hi))
+                offer_pairs_count += 1
+                if offer_pairs_count >= AI_MATCH_OFFER_CAP:
+                    break
+            if offer_pairs_count >= AI_MATCH_OFFER_CAP:
+                break
+
+        legacy_pairs_count = 0
+        ekf_rows: list = []
+        tdm_rows: list = []
+        if USE_LEGACY_PRODUCT_MATCHING:
+            ekf_rows = session.execute(
+                select(Product.id, Product.name)
+                .where(Product.source_shop == "EKF")
+                .limit(MATCH_LIMIT_PER_SHOP)
+            ).all()
+            tdm_rows = session.execute(
+                select(Product.id, Product.name)
+                .where(Product.source_shop == "TDM Electric")
+                .limit(MATCH_LIMIT_PER_SHOP)
+            ).all()
+            if ekf_rows and tdm_rows:
+                names_a = [str(r[1]) for r in ekf_rows]
+                names_b = [str(r[1]) for r in tdm_rows]
+                ids_a = [int(r[0]) for r in ekf_rows]
+                ids_b = [int(r[0]) for r in tdm_rows]
+                raw = find_cross_shop_pairs(
+                    names_a,
+                    names_b,
+                    min_score=AI_MATCH_MIN_SCORE,
+                    max_pairs=2000,
+                )
+                one_to_one = filter_greedy_one_to_one(raw)[:400]
+                legacy_pairs_count = len(one_to_one)
+                for pair in one_to_one:
+                    ia, ib = ids_a[pair.idx_a], ids_b[pair.idx_b]
+                    low, high = (ia, ib) if ia < ib else (ib, ia)
+                    session.add(
+                        ProductMatch(
+                            product_low_id=low,
+                            product_high_id=high,
+                            score=pair.score,
+                            method="tfidf_cosine",
+                            match_kind=MATCH_KIND_FUZZY_TFIDF,
+                            match_status=MATCH_STATUS_SUGGESTED,
+                        )
+                    )
 
         for pid in pids:
             rows = session.execute(
@@ -202,11 +272,12 @@ def run_ai_cycle() -> None:
 
         session.commit()
         logger.info(
-            "Цикл воркера завершён: товаров с историей=%s, EKF=%s, TDM=%s, кандидатов TF-IDF=%s",
+            "Цикл воркера: история=%s, fuzzy офферов=%s (%s↔%s), legacy Product TF-IDF=%s",
             len(pids),
-            len(ekf_rows),
-            len(tdm_rows),
-            pairs_count,
+            offer_pairs_count,
+            AI_MATCH_NORMALIZED_LEFT,
+            AI_MATCH_NORMALIZED_RIGHT,
+            legacy_pairs_count,
         )
     except Exception as exc:
         logger.exception("Ошибка цикла ИИ: %s", exc)

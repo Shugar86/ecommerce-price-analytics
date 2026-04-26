@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analytics.canonical_sync import rebuild_canonical_from_normalized
+from app.collectors.barcode_enrich import enrich_normalized_offers_from_reference
 from app.collectors.complect_service import fetch_complect_offers
 from app.collectors.normalized_io import (
     replace_normalized_offers,
@@ -1149,7 +1150,11 @@ def collect_all_data(session) -> None:
     fetch_complect_offers(session)
     fetch_syperopt_offers(session)
 
-    # Канонизация (мультиисточник по артикулу)
+    # Обогащение из barcode_reference (если таблица заполнена) и канонизация
+    try:
+        enrich_normalized_offers_from_reference(session)
+    except (SQLAlchemyError, ValueError, OSError) as e:
+        logger.warning("barcode enrich: %s", e)
     try:
         rebuild_canonical_from_normalized(session)
     except (SQLAlchemyError, ValueError, OSError) as e:
