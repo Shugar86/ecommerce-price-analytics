@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from io import BytesIO
 from typing import Any, Optional
@@ -83,8 +82,8 @@ def iter_syperopt_rows(ws: Worksheet) -> list[dict[str, Any]]:
     return _iter_syperopt_rows_impl(ws)
 
 
-def _guess_brand_from_syperopt_name(name: str) -> str | None:
-    """Эвристика бренда по шапке наименования (практика Syperopt)."""
+def guess_brand_from_syperopt_name(name: str) -> str | None:
+    """Эвристика бренда по шапке наименования (практика Syperopt, Complect full)."""
     n = name.upper()
     if "WAGO" in n:
         return "WAGO"
@@ -150,7 +149,7 @@ def _iter_syperopt_rows_impl(ws: Worksheet) -> list[dict[str, Any]]:
                 continue
             vendor = guess_vendor_code(name)
             barcode = first_barcode(name)
-            brand = _guess_brand_from_syperopt_name(name)
+            brand = guess_brand_from_syperopt_name(name)
             out.append(
                 {
                     "name": name,
@@ -195,7 +194,7 @@ def _iter_syperopt_rows_impl(ws: Worksheet) -> list[dict[str, Any]]:
         ) or guess_vendor_code(name)
         bc_raw = cell(c_barcode) if c_barcode else ""
         barcode = first_barcode(bc_raw) if bc_raw else first_barcode(name)
-        brand = cell(c_brand) if c_brand else _guess_brand_from_syperopt_name(name)
+        brand = cell(c_brand) if c_brand else guess_brand_from_syperopt_name(name)
 
         out.append(
             {

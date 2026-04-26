@@ -1,5 +1,9 @@
 # COMMANDS - Полезные команды для работы с проектом
 
+## Источники данных (URL)
+
+Сводная таблица активных коллекторов и фидов — в **[README.md](README.md)** (раздел «Источники данных»): ЦБ РФ, TBM, GalaCentre, EKF YML, TDM XLS, Комплект-Сервис (шесть XLS), Syperopt XLSX, опционально FakeStore. Имена в `normalized_offers.source_name` для КС — человекочитаемые строки из `COMPLECT_SERVICE_SOURCES` (`app/collectors/complect_service.py`).
+
 ## 🚀 Запуск и остановка
 
 ## 🪟 Windows (PowerShell) — запуск одной командой

@@ -21,15 +21,15 @@ from typing import Any, Optional
 
 import requests
 from lxml import etree
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analytics.canonical_sync import rebuild_canonical_from_normalized
 from app.collectors.barcode_enrich import enrich_normalized_offers_from_reference
-from app.collectors.barcodes_catalog_api import enrich_offers_gaps_from_api
+from app.collectors.barcode_reference_loader import download_and_load_barcode_reference
 from app.collectors.owwa import run_owwa_ingest_stub
-from app.collectors.complect_service import fetch_complect_offers
+from app.collectors.complect_service import fetch_all_complect_service
 from app.collectors.normalized_io import (
     record_source_health_failure,
     replace_normalized_offers,
@@ -38,6 +38,7 @@ from app.collectors.normalized_io import (
 from app.collectors.syperopt import fetch_syperopt_offers
 from app.collectors.xls_common import iter_xls_tdm_rows
 from app.database import (
+    BarcodeReference,
     ExchangeRate,
     Product,
     SourceHealth,
@@ -1361,8 +1362,9 @@ def collect_all_data(session) -> None:
     # Шаг 6: TDM Electric (XLS)
     fetch_tdm_goods_from_xls(session)
 
-    # Шаг 7–8: Complect, Syperopt -> normalized_offers
-    fetch_complect_offers(session)
+    # Шаг 7–8: Complect-Service (XLS), Syperopt (XLSX) -> normalized_offers
+    fetch_all_complect_service(session)
+    # Syperopt: в pipeline; URL http://www.syperopt.ru/...xlsx проверен (200 OK, XLSX).
     fetch_syperopt_offers(session)
 
     # Обогащение из barcode_reference (если таблица заполнена) и канонизация
@@ -1370,10 +1372,6 @@ def collect_all_data(session) -> None:
         enrich_normalized_offers_from_reference(session)
     except (SQLAlchemyError, ValueError, OSError) as e:
         logger.warning("barcode enrich: %s", e)
-    try:
-        enrich_offers_gaps_from_api(session)
-    except (SQLAlchemyError, ValueError, OSError) as e:
-        logger.warning("barcodes catalog api: %s", e)
     try:
         run_owwa_ingest_stub(session)
     except (SQLAlchemyError, ValueError, OSError) as e:
@@ -1411,7 +1409,27 @@ def main() -> None:
         
         # Инициализация структуры БД
         init_db(engine)
-        
+
+        if os.getenv("BARCODE_REFERENCE_AUTO_LOAD", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            _session = get_session(engine)
+            try:
+                n_ref = _session.scalar(select(func.count()).select_from(BarcodeReference))
+                if n_ref == 0:
+                    logger.info(
+                        "BARCODE_REFERENCE_AUTO_LOAD: загрузка справочника штрихкодов"
+                    )
+                    download_and_load_barcode_reference(_session)
+                    _session.commit()
+            except (SQLAlchemyError, OSError, ValueError) as e:
+                logger.warning("BARCODE_REFERENCE_AUTO_LOAD: %s", e)
+                _session.rollback()
+            finally:
+                _session.close()
+
         # Бесконечный цикл сбора данных
         while not _shutdown_requested:
             try:

@@ -22,7 +22,7 @@ from app.collectors.health_stats import coverage_from_rows
 from app.collectors.syperopt import SYPEROPT_XLSX_URL, iter_syperopt_rows
 from app.collectors.xls_common import iter_xls_tdm_rows
 from app.collector import EKF_YML_URL, TDM_PRICE_XLS_URL  # noqa: PLC2401
-from app.collectors.complect_service import COMPLECT_URLS, _complect_rows
+from app.collectors.complect_service import COMPLECT_SERVICE_SOURCES, _complect_rows
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,8 @@ SOURCES: list[tuple[str, str, str]] = [
     ("TDM XLS", "xls", TDM_PRICE_XLS_URL),
     ("Syperopt", "xlsx", SYPEROPT_XLSX_URL),
 ] + [
-    (f"Complect {k}", "xls", u) for k, u in COMPLECT_URLS.items()
+    (display, f"xls-complect:{key}", url)
+    for key, (display, url) in COMPLECT_SERVICE_SOURCES.items()
 ]
 
 
@@ -103,7 +104,7 @@ def _rows_xlsx_syperopt(url: str) -> list[dict[str, Any]]:
         wb.close()
 
 
-def _rows_complect_xls(url: str, label: str) -> list[dict[str, Any]]:
+def _rows_complect_xls(url: str, key: str) -> list[dict[str, Any]]:
     response = requests.get(
         url,
         timeout=300,
@@ -112,7 +113,7 @@ def _rows_complect_xls(url: str, label: str) -> list[dict[str, Any]]:
     response.raise_for_status()
     book = xlrd.open_workbook(file_contents=response.content)
     sheet = book.sheet_by_index(0)
-    return _complect_rows(sheet, label)
+    return _complect_rows(sheet, key)
 
 
 def audit_all(out_path: Path) -> int:
@@ -137,9 +138,9 @@ def audit_all(out_path: Path) -> int:
         )
         for name, kind, url in SOURCES:
             try:
-                if name.startswith("Complect "):
-                    label = name.replace("Complect ", "", 1)
-                    rows = _rows_complect_xls(url, label)
+                if kind.startswith("xls-complect:"):
+                    ckey = kind.split(":", 1)[1]
+                    rows = _rows_complect_xls(url, ckey)
                 elif kind == "yml":
                     rows = _rows_ekf_yml(url)
                 elif kind == "xls" and "TDM" in name:

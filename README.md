@@ -42,9 +42,9 @@ AI_WORKER_INTERVAL_SEC=300
 docker compose up -d --build
 ```
 
-Переменные из `.env` для ETL и KPI, если они заданы, подставляются в compose и передаются в сервисы: у **collector** — `SHOP_ITEM_LIMIT`, `ENABLE_FAKESTORE`, таймауты Complect/Syperopt/EKF/TDM, `ENABLE_BARCODES_CATALOG_API`, `ENABLE_OWWA`; у **web** и **ai_worker** — `OUR_PRICING_SOURCE`, `OUR_PRICING_SOURCE_PRIORITY`, `AI_MATCH_SOURCE_PAIRS` (несколько пар для fuzzy-ревью), `AI_MATCH_MIN_SCORE`, `AI_MATCH_LIMIT_PER_SHOP`, `AI_MATCH_NORMALIZED_LEFT|RIGHT`, `AI_MATCH_OFFER_CAP`, `USE_LEGACY_PRODUCT_MATCHING`. Таблица `source_health` в UI `/sources` показывает `last_error` и длительность загрузки. Загрузка штрихкодов Catalog.app: `python -m app.tools.fetch_barcode_reference_catalog` (см. `env.example`). Локальный `docker-compose.override.yml` может переопределить порты (например **8010** вместо 8000).
+Переменные из `.env` для ETL и KPI, если они заданы, подставляются в compose и передаются в сервисы: у **collector** — `SHOP_ITEM_LIMIT`, `ENABLE_FAKESTORE`, таймауты Complect-Service (`COMPLECT_SERVICE_*`), Syperopt, EKF, TDM, опционально `BARCODE_REFERENCE_AUTO_LOAD`, `ENABLE_OWWA`; API **barcodes-catalog.ru** в основной цикл collector **не входит** (Cloudflare). У **web** и **ai_worker** — `OUR_PRICING_SOURCE`, `OUR_PRICING_SOURCE_PRIORITY`, `AI_MATCH_SOURCE_PAIRS` и др. Таблица `source_health` в UI `/sources` показывает `last_error` и длительность загрузки. Загрузка штрихкодов Catalog.app: `python -m app.tools.fetch_barcode_reference_catalog` или `app.collectors.barcode_reference_loader` (см. `env.example`). Локальный `docker-compose.override.yml` может переопределить порты (например **8010** вместо 8000).
 
-В **`normalized_offers` / `source_health`** попадают: EKF YML, TDM Electric, Syperopt, все XLS Complect (правая ИЭК в реестре — **`Complect IEK`**, отдельного фида «IEK» в коде нет), **TBM Market** и **GalaCentre** (YML). Дополнительные URL вне этого списка в репозитории не подключены.
+В **`normalized_offers` / `source_health`** попадают: **EKF YML**, **TDM Electric**, **Syperopt XLSX**, прайсы **Комплект-Сервис** (имена вида `EKF (Комплект-Сервис)`, `IEK (Комплект-Сервис)`, `Schneider Electric (КС)`, `Legrand (Комплект-Сервис)`, `WAGO (Комплект-Сервис)`, `Full Price (Комплект-Сервис)` — агрегированный full пропускается, если успешно загружены все пять брендовых XLS), **TBM Market** и **GalaCentre** (YML). См. раздел **«Источники данных»** ниже с URL.
 
 По умолчанию **PostgreSQL и Adminer не проброшены на хост** (только внутри сети Docker). Чтобы открыть порты `5432` и `8080` для локальной отладки:
 
@@ -118,7 +118,25 @@ python3 -m venv .venv
 
 ## Источники данных
 
-ЦБ РФ, FakeStore, TBM Market, GalaCentre, EKF (YML), TDM Electric (XLS) — см. `app/collector.py`.
+Активные коллекторы и публичные URL (константы в основном в `app/collector.py`, `app/collectors/complect_service.py`, `app/collectors/syperopt.py`):
+
+| Источник | Описание | URL |
+|----------|----------|-----|
+| ЦБ РФ | Курс USD (XML) | `http://www.cbr.ru/scripts/XML_daily.asp` |
+| TBM Market | YML | `https://www.tbmmarket.ru/tbmmarket/service/yandex-market.xml` |
+| GalaCentre | YML | `https://www.galacentre.ru/download/yml/yml.xml` |
+| EKF | YML | `https://export-xml.storage.yandexcloud.net/products.yml` |
+| TDM Electric | XLS | `https://tdme.ru/download/priceTDM.xls` |
+| Complect-Service EKF | XLS | `https://www.complect-service.ru/prices/ekf.xls` |
+| Complect-Service IEK | XLS | `https://www.complect-service.ru/prices/ieknew.xls` |
+| Complect-Service Schneider | XLS | `https://www.complect-service.ru/prices/schneider.xls` |
+| Complect-Service Legrand | XLS | `https://www.complect-service.ru/prices/legrand.xls` |
+| Complect-Service WAGO | XLS | `https://www.complect-service.ru/prices/wago.xls` |
+| Complect-Service Full | XLS | `https://www.complect-service.ru/prices/fullpricecp.xls` (пропуск при успешных пяти брендах) |
+| Syperopt | XLSX | `http://www.syperopt.ru/price_wago_abb_legrand_iek_495t5890043_syperopt_ru.xlsx` |
+| FakeStore | JSON | `https://fakestoreapi.com/products` (только при `ENABLE_FAKESTORE=1`) |
+
+Справочник штрихкодов (Tier B): ZIP Catalog.app `https://catalog.app/public-opportunities/download-public-file?fileName=barcodes_csv.zip` — загрузка вручную или `BARCODE_REFERENCE_AUTO_LOAD=true` при пустой таблице.
 
 ### Имена источников: `products` vs normalized layer
 

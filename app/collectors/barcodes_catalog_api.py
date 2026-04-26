@@ -1,7 +1,12 @@
 """
 Опциональное обогащение (Tier B) через публичный API barcodes-catalog.ru.
 
-См. план: выборочные запросы, не для полного каталога.
+Внимание: хостинг API часто защищён Cloudflare (JS-challenge). Запросы без
+полноценного браузера (headless collector) могут получать не JSON, а страницу
+проверки — не используйте этот модуль в автоматическом ETL-pipeline.
+
+Ручной/экспериментальный вызов: включите ``ENABLE_BARCODES_CATALOG_API`` и
+вызывайте ``enrich_offers_gaps_from_api`` из скрипта, не из ``collect_all_data``.
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ def _rate_delay_sec() -> float:
 def _lookup_free_search(barcode: str) -> Optional[Mapping[str, Any]]:
     """
     Выполняет GET free_search для одного штрихкода.
+
+    Может стабильно ломаться из-за Cloudflare при не-браузерных клиентах.
     """
     base = (os.getenv("BARCODES_CATALOG_API_BASE") or _DEFAULT_BASE).rstrip("/")
     url = f"{base}/barcode/free_search"

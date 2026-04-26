@@ -12,11 +12,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.collectors.health_stats import coverage_from_rows
-from app.database import NormalizedOffer, SourceHealth
+from app.database import BarcodeReference, NormalizedOffer, SourceHealth
+from app.ml.matching import normalize_barcode
 
 logger = logging.getLogger(__name__)
 
 _ERR_MAX = 1900
+_REF_LOOKUP_CHUNK = 500
 
 
 def _trunc_err(msg: str) -> str:
@@ -25,6 +27,69 @@ def _trunc_err(msg: str) -> str:
     if len(s) <= _ERR_MAX:
         return s
     return s[: _ERR_MAX - 3] + "..."
+
+
+def _batch_enrich_from_barcode_reference(
+    session: Session, rows: list[dict[str, Any]]
+) -> None:
+    """Дозаполняет brand и vendor_code из ``barcode_reference`` (один запрос на пачку)."""
+    codes: set[str] = set()
+    for row in rows:
+        bc = normalize_barcode(
+            str(row["barcode"]) if row.get("barcode") is not None else None
+        )
+        if not bc:
+            continue
+        b = row.get("brand")
+        v = row.get("vendor_code")
+        need_brand = b is None or not str(b).strip()
+        need_vc = v is None or not str(v).strip()
+        if need_brand or need_vc:
+            codes.add(bc)
+    if not codes:
+        return
+    by_bc: dict[str, BarcodeReference] = {}
+    codes_list = list(codes)
+    for i in range(0, len(codes_list), _REF_LOOKUP_CHUNK):
+        chunk = codes_list[i : i + _REF_LOOKUP_CHUNK]
+        refs = session.scalars(
+            select(BarcodeReference).where(BarcodeReference.barcode.in_(chunk))
+        ).all()
+        for r in refs:
+            by_bc[r.barcode] = r
+    for row in rows:
+        bc = normalize_barcode(
+            str(row["barcode"]) if row.get("barcode") is not None else None
+        )
+        if not bc or bc not in by_bc:
+            continue
+        ref = by_bc[bc]
+        b = row.get("brand")
+        v = row.get("vendor_code")
+        need_brand = b is None or not str(b).strip()
+        need_vc = v is None or not str(v).strip()
+        if need_vc and ref.article and str(ref.article).strip():
+            row["vendor_code"] = str(ref.article).strip()[:128]
+        if need_brand and ref.vendor and str(ref.vendor).strip():
+            row["brand"] = str(ref.vendor).strip()[:200]
+
+
+def enrich_from_barcode_reference(
+    session: Session, offer_dict: Mapping[str, Any]
+) -> dict[str, Any]:
+    """
+    Возвращает копию оффера с подстановкой brand/vendor_code из справочника.
+
+    Args:
+        session: Сессия БД.
+        offer_dict: Поля оффера (как для normalized_offers).
+
+    Returns:
+        Новый словарь с возможными заполненными полями.
+    """
+    d = dict(offer_dict)
+    _batch_enrich_from_barcode_reference(session, [d])
+    return d
 
 
 def replace_normalized_offers(
@@ -53,8 +118,19 @@ def replace_normalized_offers(
     session.execute(
         delete(NormalizedOffer).where(NormalizedOffer.source_name == source_name)
     )
+    materialized: list[dict[str, Any]] = [dict(r) for r in rows]
+    _batch_enrich_from_barcode_reference(session, materialized)
+    for i, orig in enumerate(rows):
+        if isinstance(orig, dict):
+            m = materialized[i]
+            ob, om = orig.get("brand"), m.get("brand")
+            ov, mv = orig.get("vendor_code"), m.get("vendor_code")
+            if om and (ob is None or not str(ob).strip()):
+                orig["brand"] = om
+            if mv and (ov is None or not str(ov).strip()):
+                orig["vendor_code"] = mv
     n = 0
-    for r in rows:
+    for r in materialized:
         session.add(
             NormalizedOffer(
                 source_name=source_name,
