@@ -48,6 +48,9 @@ postgres_data/
 # Pytest
 .pytest_cache/
 
+# Локальные прайсы (не коммитить коммерческие выгрузки)
+zayavka*.xls
+
 # Local / large artifacts (keep out of git; use releases or LFS if needed)
 artifacts/
 uml_diagrams/

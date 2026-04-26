@@ -9,3 +9,9 @@ services:
   adminer:
     ports:
       - "8080:8080"
+
+  # Локальный прайс ТДМ (заявка Рыбинск): положите zayavka77rybinsk.xls в корень репозитория, в .env:
+  # LOCAL_PRICE_XLS_PATH=/data/zayavka77rybinsk.xls
+  collector:
+    volumes:
+      - ./zayavka77rybinsk.xls:/data/zayavka77rybinsk.xls:ro

@@ -1,7 +1,8 @@
 """
 Аналитический воркер: периодический пересчёт аномалий цен, кандидатов сопоставления и прогнозов.
 
-Основная очередь ревью — пары ``normalized_offers`` (TF-IDF из ``match_pair``, только fuzzy).
+Основная очередь ревью — пары ``normalized_offers`` (fuzzy Jaccard из ``match_pair`` для
+нескольких пар источников; см. ``AI_MATCH_SOURCE_PAIRS`` / дефолт в ``source_pairs``).
 Опционально: legacy TF-IDF по ``Product`` (EKF ↔ TDM), ``USE_LEGACY_PRODUCT_MATCHING=1``.
 """
 
@@ -73,6 +74,20 @@ USE_LEGACY_PRODUCT_MATCHING = os.getenv(
 AI_MATCH_NORMALIZED_LEFT = os.getenv("AI_MATCH_NORMALIZED_LEFT", "EKF YML")
 AI_MATCH_NORMALIZED_RIGHT = os.getenv("AI_MATCH_NORMALIZED_RIGHT", "TDM Electric")
 AI_MATCH_OFFER_CAP = _env_int("AI_MATCH_OFFER_CAP", 400)
+
+
+def _offer_cap_per_pair(num_pairs: int) -> int:
+    """
+    Лимит fuzzy-кандидатов на одну пару источников за цикл.
+
+    Если задан ``AI_MATCH_OFFER_CAP_PER_PAIR`` — используется он (минимум 1).
+    Иначе ``max(1, AI_MATCH_OFFER_CAP // num_pairs)``, чтобы поздние пары не голодали.
+    """
+    raw = os.getenv("AI_MATCH_OFFER_CAP_PER_PAIR")
+    if raw is not None and str(raw).strip():
+        return max(1, int(str(raw).strip(), 10))
+    return max(1, AI_MATCH_OFFER_CAP // max(1, num_pairs))
+
 
 _FUZZY_BLOCK_TOKENS = os.getenv(
     "AI_MATCH_BLOCK_NO_TOKEN_OVERLAP", "1"
@@ -200,6 +215,14 @@ def run_ai_cycle() -> None:
                 )
 
         source_pairs = parse_ai_match_source_pairs()
+        n_pairs = max(1, len(source_pairs))
+        per_pair_cap = _offer_cap_per_pair(n_pairs)
+        logger.info(
+            "Fuzzy normalized: пар источников=%s, лимит кандидатов на пару=%s (~всего до %s)",
+            n_pairs,
+            per_pair_cap,
+            per_pair_cap * n_pairs,
+        )
 
         existing_offer_pairs = {
             (int(r[0]), int(r[1]))
@@ -212,9 +235,9 @@ def run_ai_cycle() -> None:
         }
 
         offer_pairs_count = 0
+        pair_counts: list[tuple[str, str, int]] = []
         for left_name, right_name in source_pairs:
-            if offer_pairs_count >= AI_MATCH_OFFER_CAP:
-                break
+            pair_added = 0
             left_offers = session.scalars(
                 select(NormalizedOffer)
                 .where(NormalizedOffer.source_name == left_name)
@@ -250,11 +273,15 @@ def run_ai_cycle() -> None:
                         )
                     )
                     existing_offer_pairs.add((lo, hi))
+                    pair_added += 1
                     offer_pairs_count += 1
-                    if offer_pairs_count >= AI_MATCH_OFFER_CAP:
+                    if pair_added >= per_pair_cap:
                         break
-                if offer_pairs_count >= AI_MATCH_OFFER_CAP:
+                if pair_added >= per_pair_cap:
                     break
+            pair_counts.append((left_name, right_name, pair_added))
+        if pair_counts:
+            logger.info("Fuzzy по парам (добавлено кандидатов): %s", pair_counts)
 
         legacy_pairs_count = 0
         ekf_rows: list = []

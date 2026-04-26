@@ -42,9 +42,9 @@ AI_WORKER_INTERVAL_SEC=300
 docker compose up -d --build
 ```
 
-Переменные из `.env` для ETL и KPI, если они заданы, подставляются в compose и передаются в сервисы: у **collector** — `SHOP_ITEM_LIMIT`, `ENABLE_FAKESTORE`, таймауты Complect-Service (`COMPLECT_SERVICE_*`), Syperopt, EKF, TDM, опционально `BARCODE_REFERENCE_AUTO_LOAD`, `ENABLE_OWWA`; API **barcodes-catalog.ru** в основной цикл collector **не входит** (Cloudflare). У **web** и **ai_worker** — `OUR_PRICING_SOURCE`, `OUR_PRICING_SOURCE_PRIORITY`, `AI_MATCH_SOURCE_PAIRS` и др. Таблица `source_health` в UI `/sources` показывает `last_error` и длительность загрузки. Загрузка штрихкодов Catalog.app: `python -m app.tools.fetch_barcode_reference_catalog` или `app.collectors.barcode_reference_loader` (см. `env.example`). Локальный `docker-compose.override.yml` может переопределить порты (например **8010** вместо 8000).
+Переменные из `.env` для ETL и KPI, если они заданы, подставляются в compose и передаются в сервисы: у **collector** — `SHOP_ITEM_LIMIT`, `ENABLE_FAKESTORE`, таймауты Complect-Service (`COMPLECT_SERVICE_*`), Syperopt, EKF, TDM, опционально **`LOCAL_PRICE_XLS_PATH`** (локальный `.xls` в `normalized_offers`; без env подхватывается **`zayavka77rybinsk.xls`** из текущего каталога при наличии файла), `BARCODE_REFERENCE_AUTO_LOAD`, `ENABLE_OWWA`; API **barcodes-catalog.ru** в основной цикл collector **не входит** (Cloudflare). У **web** и **ai_worker** — `OUR_PRICING_SOURCE`, `OUR_PRICING_SOURCE_PRIORITY`, `AI_MATCH_SOURCE_PAIRS`, квоты **`AI_MATCH_OFFER_CAP` / `AI_MATCH_OFFER_CAP_PER_PAIR`**, флаг легаси **`AI_MATCH_SINGLE_PAIR_FALLBACK`** и др. Таблица `source_health` в UI `/sources` показывает `last_error` и длительность загрузки. Загрузка штрихкодов Catalog.app: `python -m app.tools.fetch_barcode_reference_catalog` или `app.collectors.barcode_reference_loader` (см. `env.example`). Локальный `docker-compose.override.yml` может переопределить порты (например **8010** вместо 8000).
 
-В **`normalized_offers` / `source_health`** попадают: **EKF YML**, **TDM Electric**, **Syperopt XLSX**, прайсы **Комплект-Сервис** (имена вида `EKF (Комплект-Сервис)`, `IEK (Комплект-Сервис)`, `Schneider Electric (КС)`, `Legrand (Комплект-Сервис)`, `WAGO (Комплект-Сервис)`, `Full Price (Комплект-Сервис)` — агрегированный full пропускается, если успешно загружены все пять брендовых XLS), **TBM Market** и **GalaCentre** (YML). См. раздел **«Источники данных»** ниже с URL.
+В **`normalized_offers` / `source_health`** попадают: **EKF YML**, **TDM Electric**, **Syperopt XLSX**, прайсы **Комплект-Сервис** (имена вида `EKF (Комплект-Сервис)`, `IEK (Комплект-Сервис)`, `Schneider Electric (КС)`, `Legrand (Комплект-Сервис)`, `WAGO (Комплект-Сервис)`, `Full Price (Комплект-Сервис)` — агрегированный full пропускается, если успешно загружены все пять брендовых XLS), **TBM Market** и **GalaCentre** (YML), опционально локальный файл **`zayavka77rybinsk.xls`** как источник **`ТДМ Рыбинск (заявка)`** (тот же формат, что федеральный прайс ТДМ; в строках проставляется `brand=TDM`). См. `app/collectors/local_price_defaults.py` и раздел **«Источники данных»** ниже с URL.
 
 По умолчанию **PostgreSQL и Adminer не проброшены на хост** (только внутри сети Docker). Чтобы открыть порты `5432` и `8080` для локальной отладки:
 
@@ -62,7 +62,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | `adminer`  | Веб-админка БД (порт 8080 только с `docker-compose.dev.yml`) |
 | `collector`| ETL, сбор прайсов |
 | `web`      | **Аналитика** → http://localhost:8000 |
-| `ai_worker`| Аномалии, fuzzy-кандидаты по **normalized_offers** (EKF YML↔TDM), опционально legacy TF‑IDF по `products`, прогнозы |
+| `ai_worker`| Аномалии, fuzzy-кандидаты по **normalized_offers** (по умолчанию TDM↔Комплект/Syperopt, **TDM Electric↔ТДМ Рыбинск (заявка)** для локального файла, в конце EKF YML↔TDM), опционально legacy TF‑IDF по `products`, прогнозы |
 | `bot`      | Telegram-бот |
 
 ### 4. Проверка

@@ -35,6 +35,7 @@ from app.collectors.normalized_io import (
     replace_normalized_offers,
     upsert_source_health,
 )
+from app.collectors.local_price_xls import fetch_local_price_xls
 from app.collectors.syperopt import fetch_syperopt_offers
 from app.collectors.xls_common import iter_xls_tdm_rows
 from app.database import (
@@ -1384,6 +1385,9 @@ def collect_all_data(session) -> None:
     fetch_all_complect_service(session)
     # Syperopt: в pipeline; URL http://www.syperopt.ru/...xlsx проверен (200 OK, XLSX).
     fetch_syperopt_offers(session)
+
+    # Локальный XLS (опционально): LOCAL_PRICE_XLS_PATH
+    fetch_local_price_xls(session)
 
     # Обогащение из barcode_reference (если таблица заполнена) и канонизация
     try:
