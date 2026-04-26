@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import get_engine, init_db, get_session, ExchangeRate, Product
+from app.matching.text import normalize_name_for_search
 from app.price_history_util import record_price_change
 
 # Настройка логирования
@@ -131,35 +132,6 @@ def _name_matches_intersection(name: str) -> bool:
     return any(k in lowered for k in INTERSECTION_KEYWORDS)
 
 
-def _normalize_name(text: str) -> str:
-    """Нормализация имени для поиска пересечений по названию (name_norm в БД)."""
-    cleaned = (
-        text.lower()
-        .replace("ё", "е")
-        .replace("/", " ")
-        .replace("\\\\", " ")
-        .replace(",", " ")
-        .replace(".", " ")
-        .replace("(", " ")
-        .replace(")", " ")
-        .replace("[", " ")
-        .replace("]", " ")
-        .replace("{", " ")
-        .replace("}", " ")
-        .replace(":", " ")
-        .replace(";", " ")
-        .replace("|", " ")
-        .replace("+", " ")
-        .replace("—", " ")
-        .replace("–", " ")
-        .replace("-", " ")
-        .replace("\"", " ")
-        .replace("'", " ")
-    )
-    cleaned = re.sub(r"\\s+", " ", cleaned).strip()
-    return cleaned[:600]
-
-
 def _fetch_yml_stream(url: str, *, timeout: tuple[int, int] = (10, 180)) -> requests.Response:
     """Скачивает YML/XML как stream-ответ (единый helper для всех YML источников)."""
     headers = {
@@ -237,7 +209,7 @@ def fetch_ekf_goods(session) -> None:
                 stmt = insert(Product).values(
                     external_id=external_id,
                     name=name,
-                    name_norm=_normalize_name(name),
+                    name_norm=normalize_name_for_search(name),
                     price_original=price_value,
                     currency=currency if len(currency) == 3 else "RUR",
                     price_in_rub=price_in_rub,
@@ -251,7 +223,7 @@ def fetch_ekf_goods(session) -> None:
                     index_elements=["external_id"],
                     set_={
                         "name": name,
-                        "name_norm": _normalize_name(name),
+                        "name_norm": normalize_name_for_search(name),
                         "price_original": price_value,
                         "currency": currency if len(currency) == 3 else "RUR",
                         "price_in_rub": price_in_rub,
@@ -409,7 +381,7 @@ def fetch_tdm_goods_from_xls(session) -> None:
                 stmt = insert(Product).values(
                     external_id=external_id,
                     name=name,
-                    name_norm=_normalize_name(name),
+                    name_norm=normalize_name_for_search(name),
                     price_original=price_rub,
                     currency="RUB",
                     price_in_rub=price_rub,
@@ -423,7 +395,7 @@ def fetch_tdm_goods_from_xls(session) -> None:
                     index_elements=["external_id"],
                     set_={
                         "name": name,
-                        "name_norm": _normalize_name(name),
+                        "name_norm": normalize_name_for_search(name),
                         "price_original": price_rub,
                         "price_in_rub": price_rub,
                         "barcode": barcode,
@@ -579,7 +551,7 @@ def fetch_foreign_goods(session) -> None:
                 stmt = insert(Product).values(
                     external_id=external_id,
                     name=title,
-                    name_norm=_normalize_name(title),
+                    name_norm=normalize_name_for_search(title),
                     price_original=price_usd,
                     currency='USD',
                     price_in_rub=price_rub,
@@ -590,7 +562,7 @@ def fetch_foreign_goods(session) -> None:
                     index_elements=['external_id'],
                     set_={
                         'name': title,
-                        'name_norm': _normalize_name(title),
+                        'name_norm': normalize_name_for_search(title),
                         'price_original': price_usd,
                         'price_in_rub': price_rub,
                         'updated_at': datetime.utcnow()
@@ -681,7 +653,7 @@ def fetch_russian_goods(session) -> None:
                 stmt = insert(Product).values(
                     external_id=external_id,
                     name=name,
-                    name_norm=_normalize_name(name),
+                    name_norm=normalize_name_for_search(name),
                     price_original=price_rub,
                     currency='RUB',
                     price_in_rub=price_rub,
@@ -695,7 +667,7 @@ def fetch_russian_goods(session) -> None:
                     index_elements=['external_id'],
                     set_={
                         'name': name,
-                        'name_norm': _normalize_name(name),
+                        'name_norm': normalize_name_for_search(name),
                         'price_original': price_rub,
                         'price_in_rub': price_rub,
                         'barcode': barcode,
@@ -801,7 +773,7 @@ def fetch_galacentre_goods(session) -> None:
                         stmt = insert(Product).values(
                             external_id=external_id,
                             name=name,
-                            name_norm=_normalize_name(name),
+                            name_norm=normalize_name_for_search(name),
                             price_original=price_rub,
                             currency="RUB",
                             price_in_rub=price_rub,
@@ -815,7 +787,7 @@ def fetch_galacentre_goods(session) -> None:
                             index_elements=["external_id"],
                             set_={
                                 "name": name,
-                                "name_norm": _normalize_name(name),
+                                "name_norm": normalize_name_for_search(name),
                                 "price_original": price_rub,
                                 "price_in_rub": price_rub,
                                 "barcode": barcode,

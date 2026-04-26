@@ -24,6 +24,7 @@ BOT_TOKEN=your_token_here_from_botfather
 # Демо-точки истории цен для графиков (1/0); ИИ-воркер
 SEED_DEMO_HISTORY=1
 AI_WORKER_INTERVAL_SEC=300
+# Доп. переменные: см. [env.example](env.example) (SHOP_ITEM_LIMIT, AI_MATCH_LIMIT_PER_SHOP, …)
 ```
 
 ### 3. Запуск
@@ -70,24 +71,27 @@ python3 -m venv .venv
 .venv/bin/pytest tests/ -q
 ```
 
-## Структура проекта
+## Структура проекта (runtime)
 
 ```
 ├── app/
 │   ├── database.py          # Модели БД (+ история, аномалии, матчи, прогноз)
 │   ├── collector.py         # ETL
 │   ├── price_history_util.py
+│   ├── matching/            # нормализация имён, эвристики сравнения (бот / ETL / отчёты)
+│   ├── services/            # общие read-запросы (например SQL для бота)
 │   ├── bot.py               # Telegram
 │   ├── ai_worker.py         # ИИ-контур
 │   ├── ml/                  # Аномалии, TF-IDF
-│   └── web/                 # FastAPI + Jinja2 + шаблоны
+│   └── web/                 # FastAPI + Jinja2 + шаблоны (+ web/services: агрегаты дашборда)
 ├── tests/                   # pytest
+├── docs/                    # заметки к рефакторингу
 ├── alembic/                 # миграции схемы (патчи индексов / колонок)
-├── VKR_AND_PRACTICE_REPORT.md  # Текст глав 1–3 (ВКР и практика)
-├── README_REPORT.md         # Расширенная записка (курсовой наследие)
 ├── docker-compose.yml
 └── docker-compose.dev.yml   # опционально: порты db + adminer на хост
 ```
+
+**Тексты ВКР / пояснительные записки** (`VKR_AND_PRACTICE_REPORT.md`, `README_REPORT.md`, `INDEX.md` и т.д.) остаются в репо как документация; **крупные бинарники** (XLS, PDF, изображения, снимки прайсов) в индекс git не попадают — см. `.gitignore` и [docs/REFACTOR_NOTES.md](docs/REFACTOR_NOTES.md). Храните такие файлы локально, в LFS или в релизах.
 
 ## Источники данных
 
@@ -97,6 +101,7 @@ python3 -m venv .venv
 
 - **[VKR_AND_PRACTICE_REPORT.md](VKR_AND_PRACTICE_REPORT.md)** — структура ВКР и отчёта по практике (главы 1–3).
 - **[README_REPORT.md](README_REPORT.md)** — пояснительная записка с диаграммами (актуализируйте под веб/ИИ при сдаче).
+- **[docs/REFACTOR_NOTES.md](docs/REFACTOR_NOTES.md)** — изменения в структуре кода и гигиене репозитория.
 
 ## Остановка
 

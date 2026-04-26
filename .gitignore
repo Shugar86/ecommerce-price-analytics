@@ -45,3 +45,21 @@ postgres_data/
 # Pytest
 .pytest_cache/
 
+# Local / large artifacts (keep out of git; use releases or LFS if needed)
+artifacts/
+uml_diagrams/
+diagrams_viewer.html
+*.xlsx
+*.xls
+*.xlsm
+*.bin
+*.pdf
+*.docx
+*.doc
+*.jpg
+*.jpeg
+*.png
+*.webp
+README_REPORT — копия*.txt
+*_копия*.txt
+

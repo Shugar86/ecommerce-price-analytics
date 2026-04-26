@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.bot import _similarity
+from app.matching.text import similarity_jaccard_tokens
 from app.database import Product, get_engine, get_session
 
 
@@ -43,7 +43,7 @@ def main() -> None:
             best_score = -1.0
             best_item = None
             for g in gala:
-                s = _similarity(t.name, g.name)
+                s = similarity_jaccard_tokens(t.name, g.name)
                 if s > best_score:
                     best_score = s
                     best_item = g

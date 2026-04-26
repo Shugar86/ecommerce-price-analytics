@@ -9,10 +9,8 @@ import asyncio
 import html
 import logging
 import os
-from datetime import datetime
-import re
 from urllib.parse import quote_plus, unquote_plus
-from typing import Optional, Iterable
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command, CommandStart
@@ -21,6 +19,12 @@ from dotenv import load_dotenv
 from sqlalchemy import select, func
 
 from app.database import get_engine, init_db, get_session, ExchangeRate, Product
+from app.matching.text import item_type, name_only_score
+from app.services.product_queries import (
+    compare_top_by_shops,
+    find_products_by_name_substring,
+    shops_with_product_counts_desc,
+)
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -52,105 +56,6 @@ _SHOP_ALIASES: dict[str, str] = {
     "galacentre": "GalaCentre",
     "fakestore": "FakeStore",
 }
-
-_LAT_TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-_MODEL_TOKEN_RE = re.compile(r"(?=.*[a-z])(?=.*\\d)[a-z0-9]{3,32}$", re.IGNORECASE)
-
-_RU_TO_LAT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
-    "ы": "y", "э": "e", "ю": "yu", "я": "ya", "ь": "", "ъ": "",
-}
-
-
-def _to_latin(text: str) -> str:
-    t = text.lower().replace("ё", "е")
-    out: list[str] = []
-    for ch in t:
-        if "а" <= ch <= "я" or ch in ("ё", "ь", "ъ"):
-            out.append(_RU_TO_LAT.get(ch, ""))
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def _normalize_for_match(text: str) -> str:
-    """Normalize + transliterate to latin space for cross-shop matching."""
-    t = _to_latin(text)
-    t = (
-        t.replace("×", "x")
-        .replace("/", " ")
-        .replace("\\\\", " ")
-        .replace(",", " ")
-        .replace(".", " ")
-        .replace("(", " ")
-        .replace(")", " ")
-        .replace("[", " ")
-        .replace("]", " ")
-        .replace("{", " ")
-        .replace("}", " ")
-        .replace(":", " ")
-        .replace(";", " ")
-        .replace("|", " ")
-        .replace("+", " ")
-        .replace("—", " ")
-        .replace("–", " ")
-        .replace("-", " ")
-        .replace("\"", " ")
-        .replace("'", " ")
-    )
-    t = re.sub(r"\\s+", " ", t).strip()
-    return t
-
-
-def _tokens_lat(text: str) -> set[str]:
-    norm = _normalize_for_match(text)
-    toks = {t for t in _LAT_TOKEN_RE.findall(norm) if len(t) >= 3}
-    return toks
-
-
-def _model_tokens(tokens: Iterable[str]) -> set[str]:
-    return {t for t in tokens if _MODEL_TOKEN_RE.match(t)}
-
-
-def _word_tokens(tokens: Iterable[str]) -> set[str]:
-    out = set()
-    for t in tokens:
-        if t.isdigit():
-            continue
-        if any("a" <= ch <= "z" for ch in t) and len(t) >= 5:
-            out.add(t)
-    return out
-
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    if not a or not b:
-        return 0.0
-    inter = len(a & b)
-    union = len(a | b)
-    return inter / union if union else 0.0
-
-
-def _name_only_score(a: str, b: str) -> float:
-    """Name-only similarity tuned for dirty RU data + EKF latin slugs."""
-    ta = _tokens_lat(a)
-    tb = _tokens_lat(b)
-    ma, mb = _model_tokens(ta), _model_tokens(tb)
-    wa, wb = _word_tokens(ta), _word_tokens(tb)
-
-    # Prefer model tokens if present
-    if ma and mb:
-        if not (ma & mb):
-            return 0.0
-        return 0.8 * _jaccard(ma, mb) + 0.2 * _jaccard(wa, wb)
-
-    # Fallback: meaningful words
-    if len(wa) >= 2 and len(wb) >= 2 and len(wa & wb) >= 1:
-        return _jaccard(wa, wb)
-    return 0.0
-
 
 def _resolve_shop(alias: str) -> Optional[str]:
     a = (alias or "").strip().lower()
@@ -231,22 +136,10 @@ async def _run_compare(message: Message, *, shop_a: str, shop_b: str, query: str
     engine = get_engine()
     session = get_session(engine)
     try:
-        limit_per_shop = 40
         q_norm = query.lower().replace("ё", "е")
-
-        a_items = session.execute(
-            select(Product)
-            .where(Product.source_shop == shop_a, Product.name_norm.ilike(f"%{q_norm}%"))
-            .order_by(Product.price_in_rub)
-            .limit(limit_per_shop)
-        ).scalars().all()
-
-        b_items = session.execute(
-            select(Product)
-            .where(Product.source_shop == shop_b, Product.name_norm.ilike(f"%{q_norm}%"))
-            .order_by(Product.price_in_rub)
-            .limit(limit_per_shop)
-        ).scalars().all()
+        a_items, b_items = compare_top_by_shops(
+            session, shop_a, shop_b, q_norm, limit_per_shop=40
+        )
 
         def _filter(items: list[Product]) -> list[Product]:
             if not ban_terms:
@@ -296,15 +189,15 @@ async def _run_compare(message: Message, *, shop_a: str, shop_b: str, query: str
             pairs: list[tuple[Product, Product, float]] = []
 
             for a in a_items:
-                a_type = _item_type(a.name)
+                a_type = item_type(a.name)
                 best_b: Optional[Product] = None
                 best_s = 0.0
                 for b in b_items:
                     if b.id in used_b:
                         continue
-                    if _item_type(b.name) != a_type and a_type in ("fridge", "microwave"):
+                    if item_type(b.name) != a_type and a_type in ("fridge", "microwave"):
                         continue
-                    s = _name_only_score(a.name, b.name)
+                    s = name_only_score(a.name, b.name)
                     if s > best_s:
                         best_s = s
                         best_b = b
@@ -332,60 +225,6 @@ async def _run_compare(message: Message, *, shop_a: str, shop_b: str, query: str
 
     finally:
         session.close()
-
-def _tokenize_for_match(text: str) -> set[str]:
-    """Tokenize product name for rough matching between different shops.
-
-    This is a pragmatic heuristic (no ML): it helps pair similar items (e.g. microwaves/fridges)
-    across two RU catalogs even when barcodes do not match.
-    """
-    cleaned = (
-        text.lower()
-        .replace("ё", "е")
-        .replace("/", " ")
-        .replace(",", " ")
-        .replace(".", " ")
-        .replace("(", " ")
-        .replace(")", " ")
-    )
-    parts = [p.strip() for p in cleaned.split() if p.strip()]
-    # Drop very short tokens to reduce noise.
-    return {p for p in parts if len(p) >= 3}
-
-
-def _similarity(a: str, b: str) -> float:
-    """Jaccard similarity over tokens."""
-    ta = _tokenize_for_match(a)
-    tb = _tokenize_for_match(b)
-    if not ta or not tb:
-        return 0.0
-    inter = len(ta.intersection(tb))
-    union = len(ta.union(tb))
-    return inter / union
-
-
-def _item_type(name: str) -> str:
-    """Rough product type classifier for safer pairing.
-
-    Goal: avoid pairing 'Холодильник' with 'магнит на холодильник' just because of a shared word.
-    """
-    n = name.lower().replace("ё", "е")
-    if "магнит" in n:
-        return "magnet"
-    if "открываш" in n:
-        return "opener"
-    if "микроволновка" in n:
-        return "microwave"
-    if "тарелка" in n and "микроволнов" in n:
-        return "microwave_plate"
-    if "холодильник" in n or "холодильная камера" in n:
-        return "fridge"
-    if "контейнер" in n:
-        return "container"
-    if "поглот" in n or "освеж" in n:
-        return "odor"
-    return "other"
-
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
@@ -440,12 +279,7 @@ async def cmd_stats(message: Message) -> None:
         
         try:
             # Подсчет товаров по источникам (динамически, чтобы не забывать новые магазины)
-            rows = session.execute(
-                select(Product.source_shop, func.count(Product.id))
-                .group_by(Product.source_shop)
-                .order_by(func.count(Product.id).desc())
-            ).all()
-            per_shop = [(r[0], int(r[1])) for r in rows if r and r[0]]
+            per_shop = shops_with_product_counts_desc(session)
             total_count = sum(c for _, c in per_shop)
             
             # Получение текущего курса USD
@@ -505,12 +339,7 @@ async def cmd_shops(message: Message) -> None:
         engine = get_engine()
         session = get_session(engine)
         try:
-            rows = session.execute(
-                select(Product.source_shop, func.count(Product.id))
-                .group_by(Product.source_shop)
-                .order_by(func.count(Product.id).desc())
-            ).all()
-            per_shop = [(r[0], int(r[1])) for r in rows if r and r[0]]
+            per_shop = shops_with_product_counts_desc(session)
             if not per_shop:
                 await message.answer("❌ В БД пока нет товаров. Подождите, пока collector загрузит данные.")
                 return
@@ -585,26 +414,9 @@ async def cmd_find(message: Message) -> None:
         
         try:
             q_norm = query.lower().replace("ё", "е")
-
-            if shop_filter:
-                stmt = (
-                    select(Product)
-                    .where(Product.source_shop == shop_filter, Product.name_norm.ilike(f"%{q_norm}%"))
-                    .order_by(Product.price_in_rub)
-                    .limit(15)
-                )
-                results = session.execute(stmt).scalars().all()
-            else:
-                # Give users a diverse view (few from each shop)
-                results: list[Product] = []
-                for s in ("EKF", "TDM Electric", "TBM Market", "GalaCentre", "FakeStore"):
-                    rows = session.execute(
-                        select(Product)
-                        .where(Product.source_shop == s, Product.name_norm.ilike(f"%{q_norm}%"))
-                        .order_by(Product.price_in_rub)
-                        .limit(4)
-                    ).scalars().all()
-                    results.extend(rows)
+            results = find_products_by_name_substring(
+                session, q_norm, shop_filter=shop_filter, per_shop_limit=4, single_shop_limit=15
+            )
             
             if not results:
                 await message.answer(
@@ -745,12 +557,7 @@ async def cb_shops(call: CallbackQuery) -> None:
         engine = get_engine()
         session = get_session(engine)
         try:
-            rows = session.execute(
-                select(Product.source_shop, func.count(Product.id))
-                .group_by(Product.source_shop)
-                .order_by(func.count(Product.id).desc())
-            ).all()
-            per_shop = [(r[0], int(r[1])) for r in rows if r and r[0]]
+            per_shop = shops_with_product_counts_desc(session)
             if not per_shop:
                 await call.message.answer("❌ В БД пока нет товаров. Подождите, пока collector загрузит данные.")
                 return

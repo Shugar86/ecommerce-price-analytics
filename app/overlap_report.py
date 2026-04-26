@@ -21,6 +21,7 @@ from typing import Iterable, Optional
 from sqlalchemy import select
 
 from app.database import Product, get_engine, get_session, init_db
+from app.matching.text import jaccard_similarity_sets, transliterate_ru_to_latin
 
 
 @dataclass(frozen=True)
@@ -48,63 +49,12 @@ _ALNUM_LAT_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _ALNUM_MIX_LAT_RE = re.compile(r"(?=.*[a-z])(?=.*\d)[a-z0-9]+", re.IGNORECASE)
 
 
-_RU_TO_LAT = str.maketrans(
-    {
-        "а": "a",
-        "б": "b",
-        "в": "v",
-        "г": "g",
-        "д": "d",
-        "е": "e",
-        "ё": "e",
-        "ж": "zh",
-        "з": "z",
-        "и": "i",
-        "й": "y",
-        "к": "k",
-        "л": "l",
-        "м": "m",
-        "н": "n",
-        "о": "o",
-        "п": "p",
-        "р": "r",
-        "с": "s",
-        "т": "t",
-        "у": "u",
-        "ф": "f",
-        "х": "h",
-        "ц": "ts",
-        "ч": "ch",
-        "ш": "sh",
-        "щ": "sch",
-        "ы": "y",
-        "э": "e",
-        "ю": "yu",
-        "я": "ya",
-        "ь": "",
-        "ъ": "",
-    }
-)
-
-
-def _to_latin(s: str) -> str:
-    s = s.lower().replace("ё", "е")
-    # char-by-char translit (simple, good enough for matching)
-    out = []
-    for ch in s:
-        if "а" <= ch <= "я" or ch in ("ё", "ь", "ъ"):
-            out.append(_RU_TO_LAT.get(ch, ""))  # type: ignore[arg-type]
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
 def _tokens(name_norm: str) -> set[str]:
     """
     Tokenize for cross-shop matching.
     Important: we compare in *latin* space, because EKF uses latin slugs, while many RU shops use Cyrillic.
     """
-    lat = _to_latin(name_norm)
+    lat = transliterate_ru_to_latin(name_norm)
     parts = _ALNUM_LAT_RE.findall(lat)
     out = {p for p in parts if len(p) >= 3 and p not in _STOPWORDS}
     return out
@@ -137,14 +87,6 @@ def _anchor_token(tokens: set[str]) -> Optional[str]:
     if longish:
         return longish[0]
     return sorted(tokens, key=len, reverse=True)[0]
-
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    if not a or not b:
-        return 0.0
-    inter = len(a & b)
-    union = len(a | b)
-    return inter / union if union else 0.0
 
 
 def _fetch_name_rows(session, shop: str, limit: int) -> list[tuple[str, str]]:
@@ -236,7 +178,7 @@ def _fuzzy_overlaps(
                 continue
             if not (ita & itb):
                 continue
-            score = _jaccard(ita, itb)
+            score = jaccard_similarity_sets(ita, itb)
             if score > best_score:
                 best_score = score
                 best_name_b = name_b

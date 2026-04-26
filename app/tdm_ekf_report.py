@@ -23,47 +23,10 @@ from typing import Iterable, Optional
 from sqlalchemy import select
 
 from app.database import Product, get_engine, get_session, init_db
+from app.matching.text import normalize_for_match_scoring
 
-
-# --- Normalization / transliteration ---
-
-_RU_TO_LAT = str.maketrans(
-    {
-        "а": "a",
-        "б": "b",
-        "в": "v",
-        "г": "g",
-        "д": "d",
-        "е": "e",
-        "ё": "e",
-        "ж": "zh",
-        "з": "z",
-        "и": "i",
-        "й": "y",
-        "к": "k",
-        "л": "l",
-        "м": "m",
-        "н": "n",
-        "о": "o",
-        "п": "p",
-        "р": "r",
-        "с": "s",
-        "т": "t",
-        "у": "u",
-        "ф": "f",
-        "х": "h",
-        "ц": "ts",
-        "ч": "ch",
-        "ш": "sh",
-        "щ": "sch",
-        "ы": "y",
-        "э": "e",
-        "ю": "yu",
-        "я": "ya",
-        "ь": "",
-        "ъ": "",
-    }
-)
+# Model-token regex here is intentionally different (allows -/.) from app.matching ``_MODEL_TOKEN_RE``;
+# this report targets TDM/EKF slug shapes. Normalization path is shared via ``normalize_for_match_scoring``.
 
 _ALNUM = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _MODEL_TOKEN = re.compile(r"(?=.*[a-z])(?=.*\d)[a-z0-9][a-z0-9\\-_/\\.]{2,32}$", re.IGNORECASE)
@@ -99,46 +62,6 @@ _STOP = {
     "ip67",
     "ral",
 }
-
-
-def _to_latin(s: str) -> str:
-    s = s.lower().replace("ё", "е")
-    out = []
-    for ch in s:
-        if "а" <= ch <= "я" or ch in ("ё", "ь", "ъ"):
-            out.append(_RU_TO_LAT.get(ch, ""))  # type: ignore[arg-type]
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def _normalize(s: str) -> str:
-    s = _to_latin(s)
-    # unify separators
-    s = (
-        s.replace("×", "x")
-        .replace("/", " ")
-        .replace("\\\\", " ")
-        .replace(",", " ")
-        .replace(".", " ")
-        .replace("(", " ")
-        .replace(")", " ")
-        .replace("[", " ")
-        .replace("]", " ")
-        .replace("{", " ")
-        .replace("}", " ")
-        .replace(":", " ")
-        .replace(";", " ")
-        .replace("|", " ")
-        .replace("+", " ")
-        .replace("—", " ")
-        .replace("–", " ")
-        .replace("-", " ")
-        .replace("'", " ")
-        .replace("\"", " ")
-    )
-    s = re.sub(r"\\s+", " ", s).strip()
-    return s
 
 
 def _tokens(norm: str) -> list[str]:
@@ -206,7 +129,7 @@ def _fetch_items(session, shop: str, limit: int) -> list[Item]:
     for pid, name in rows:
         if not name:
             continue
-        norm = _normalize(name)
+        norm = normalize_for_match_scoring(name)
         toks = _tokens(norm)
         models = _model_tokens(toks)
         words = _word_tokens(toks)

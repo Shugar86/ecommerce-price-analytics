@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import Date, cast, func, or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from urllib.parse import quote_plus
@@ -35,6 +35,7 @@ from app.database import (
     get_session,
     init_db,
 )
+from app.web.services import build_dashboard_template_context
 
 logger = logging.getLogger(__name__)
 
@@ -162,52 +163,8 @@ def ready() -> dict[str, str]:
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, session: SessionDep) -> HTMLResponse:
     """Главная страница: сводные метрики."""
-    total = session.scalar(select(func.count(Product.id))) or 0
-    shops = session.execute(
-        select(Product.source_shop, func.count(Product.id))
-        .group_by(Product.source_shop)
-        .order_by(func.count(Product.id).desc())
-    ).all()
-    last_upd = session.scalar(select(func.max(Product.updated_at)))
-    price_stats = session.execute(
-        select(
-            func.min(Product.price_in_rub),
-            func.max(Product.price_in_rub),
-            func.avg(Product.price_in_rub),
-        )
-    ).one()
-    anomalies_n = session.scalar(select(func.count(PriceAnomaly.id))) or 0
-    matches_n = session.scalar(select(func.count(ProductMatch.id))) or 0
-
-    day_col = cast(PriceHistory.collected_at, Date)
-    history_trend = session.execute(
-        select(day_col, func.avg(PriceHistory.price_in_rub))
-        .group_by(day_col)
-        .order_by(day_col.desc())
-        .limit(10)
-    ).all()
-    history_trend = list(reversed(history_trend))
-    trend_labels = [r[0].isoformat() if r[0] else "" for r in history_trend]
-    trend_values = [float(r[1] or 0) for r in history_trend]
-
-    shop_labels = [s for s, _ in shops if s]
-    shop_counts = [int(c) for s, c in shops if s]
-
-    ctx = {
-        "request": request,
-        "total_products": int(total),
-        "shops": [(s, int(c)) for s, c in shops if s],
-        "last_update": last_upd,
-        "price_min": float(price_stats[0] or 0),
-        "price_max": float(price_stats[1] or 0),
-        "price_avg": float(price_stats[2] or 0),
-        "anomalies_n": int(anomalies_n),
-        "matches_n": int(matches_n),
-        "shop_labels_json": json.dumps(shop_labels, ensure_ascii=False),
-        "shop_counts_json": json.dumps(shop_counts, ensure_ascii=False),
-        "trend_labels_json": json.dumps(trend_labels, ensure_ascii=False),
-        "trend_values_json": json.dumps(trend_values, ensure_ascii=False),
-    }
+    ctx = build_dashboard_template_context(session)
+    ctx["request"] = request
     return templates.TemplateResponse("dashboard.html", ctx)
 
 
