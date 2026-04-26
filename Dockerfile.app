@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Копирование приложения и миграций
 COPY app/ /app/app/
+COPY tools/ /app/tools/
 COPY alembic.ini /app/alembic.ini
 COPY alembic/ /app/alembic/
 

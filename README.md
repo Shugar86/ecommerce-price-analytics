@@ -42,6 +42,10 @@ AI_WORKER_INTERVAL_SEC=300
 docker compose up -d --build
 ```
 
+Переменные из `.env` для ETL и KPI, если они заданы, подставляются в compose и передаются в сервисы: у **collector** — `SHOP_ITEM_LIMIT`, `ENABLE_FAKESTORE`, таймауты Complect/Syperopt/EKF/TDM, `ENABLE_BARCODES_CATALOG_API`, `ENABLE_OWWA`; у **web** и **ai_worker** — `OUR_PRICING_SOURCE`, `OUR_PRICING_SOURCE_PRIORITY`, `AI_MATCH_SOURCE_PAIRS` (несколько пар для fuzzy-ревью), `AI_MATCH_MIN_SCORE`, `AI_MATCH_LIMIT_PER_SHOP`, `AI_MATCH_NORMALIZED_LEFT|RIGHT`, `AI_MATCH_OFFER_CAP`, `USE_LEGACY_PRODUCT_MATCHING`. Таблица `source_health` в UI `/sources` показывает `last_error` и длительность загрузки. Загрузка штрихкодов Catalog.app: `python -m app.tools.fetch_barcode_reference_catalog` (см. `env.example`). Локальный `docker-compose.override.yml` может переопределить порты (например **8010** вместо 8000).
+
+В **`normalized_offers` / `source_health`** попадают: EKF YML, TDM Electric, Syperopt, все XLS Complect (правая ИЭК в реестре — **`Complect IEK`**, отдельного фида «IEK» в коде нет), **TBM Market** и **GalaCentre** (YML). Дополнительные URL вне этого списка в репозитории не подключены.
+
 По умолчанию **PostgreSQL и Adminer не проброшены на хост** (только внутри сети Docker). Чтобы открыть порты `5432` и `8080` для локальной отладки:
 
 ```bash
@@ -71,6 +75,8 @@ docker compose logs -f ai_worker
 ```
 
 В браузере: **http://localhost:8000** — **«Сегодня»** (сигналы KPI, источники, ревью), **рынок** (`/market`), **источники** (`/sources`), товары, **алерты** (`/alerts`, бывш. аномалии), сопоставления, выгрузки CSV.
+
+**Пакет для защиты (полный ETL, цифры, скриншоты):** после цикла `collector` запустите [`tools/etl_defense_report.py`](tools/etl_defense_report.py) — срез `source_health`, агрегаты по `normalized_offers` / канонам / `normalized_offer_matches` и готовый список URL веб-UI. Команды, ожидание по логу и порт **8010** с override — в **[COMMANDS.md](COMMANDS.md)** (раздел «Защита»).
 
 **Аудит прайс-файлов** (покрытие price/vendor_code/barcode, `usable_score`) в CSV:
 

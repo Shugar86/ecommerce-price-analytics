@@ -53,6 +53,46 @@ docker-compose down -v
 
 ---
 
+## 🎓 Защита (ETL, отчёт, скриншоты)
+
+Полный прогон: поднимите stack, дождитесь **успешного** цикла `collector` (и при необходимости — цикла `ai_worker` для кандидатов на `/matches`).
+
+**Успех по логам `collector`:** одновременно видны `ETL_SOURCE_HEALTH_SUMMARY` и `✅ Цикл сбора данных завершен`.
+
+```bash
+docker compose up -d --build
+docker compose logs -f collector
+# после появления обеих маркеров — Ctrl+C; при необходимости дождитесь воркера:
+# docker compose logs -f ai_worker
+```
+
+**Порт веб-интерфейса:** по умолчанию **8000**. Если подключён `docker-compose.override.yml` с пробросом `8010:8000`, открывайте **http://localhost:8010** (а не 8000).
+
+**Отчёт по БД (цифры для слайда)** — с хоста (`.env` + доступ к PostgreSQL; при `docker-compose.dev.yml` укажите `POSTGRES_HOST=127.0.0.1` и порт с хоста) либо из контейнера `web` после `docker compose build`:
+
+```bash
+# с хоста, из корня репо
+.venv/bin/python tools/etl_defense_report.py
+.venv/bin/python tools/etl_defense_report.py -o defense_report.txt
+
+# из контейнера
+docker compose exec web python tools/etl_defense_report.py
+```
+
+Переменные для **базового URL** в конце отчёта: `WEB_HOST` (по умолчанию `localhost`), `WEB_PORT` (по умолчанию `8000`), либо одна строка `DEFENSE_REPORT_BASE_URL` или `WEB_BASE_URL`.
+
+**URL для скриншотов** (подставьте свой порт, например `8010`):
+
+| Кадр | Путь |
+|------|------|
+| KPI «Сегодня» | `/` |
+| Источники | `/sources` |
+| Рынок | `/market` |
+| Пары | `/matches` |
+| Алерты | `/alerts` |
+
+---
+
 ## 📊 Мониторинг и логи
 
 ### Статус всех контейнеров

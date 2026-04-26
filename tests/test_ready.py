@@ -10,7 +10,6 @@ from app.web.main import app
 
 
 @patch("app.web.main.dispose_engine", MagicMock())
-@patch("app.web.main.init_db", MagicMock())
 @patch("app.web.main.get_engine")
 def test_ready_ok_when_database_responds(mock_get_engine: MagicMock) -> None:
     """При успешном SELECT 1 возвращается 200 и статус ready."""
@@ -29,7 +28,6 @@ def test_ready_ok_when_database_responds(mock_get_engine: MagicMock) -> None:
 
 
 @patch("app.web.main.dispose_engine", MagicMock())
-@patch("app.web.main.init_db", MagicMock())
 @patch("app.web.main.get_engine")
 def test_ready_503_when_database_fails(mock_get_engine: MagicMock) -> None:
     """При ошибке БД — 503."""

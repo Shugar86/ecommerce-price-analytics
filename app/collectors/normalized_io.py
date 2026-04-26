@@ -16,6 +16,16 @@ from app.database import NormalizedOffer, SourceHealth
 
 logger = logging.getLogger(__name__)
 
+_ERR_MAX = 1900
+
+
+def _trunc_err(msg: str) -> str:
+    """Укладывает сообщение в лимит колонки last_error."""
+    s = (msg or "").strip().replace("\n", " ")
+    if len(s) <= _ERR_MAX:
+        return s
+    return s[: _ERR_MAX - 3] + "..."
+
 
 def replace_normalized_offers(
     session: Session,
@@ -67,11 +77,42 @@ def replace_normalized_offers(
     return n
 
 
+def record_source_health_failure(
+    session: Session,
+    source_name: str,
+    source_url: str | None,
+    err: str,
+    *,
+    duration_sec: float | None = None,
+) -> None:
+    """
+    Фиксирует неуспешную загрузку источника (HTTP/парсинг) в source_health.
+
+    Не затирает total_rows предыдущей успешной загрузки — только last_error.
+    """
+    row = session.execute(
+        select(SourceHealth).where(SourceHealth.source_name == source_name)
+    ).scalar_one_or_none()
+    if row is None:
+        row = SourceHealth(
+            source_name=source_name,
+            source_url=source_url,
+        )
+        session.add(row)
+    row.source_url = source_url or row.source_url
+    row.last_error = _trunc_err(err)
+    row.last_fetch_duration_sec = duration_sec
+    row.updated_at = datetime.utcnow()
+    logger.warning("source_health %s: FAILED %s", source_name, row.last_error)
+
+
 def upsert_source_health(
     session: Session,
     source_name: str,
     source_url: str | None,
     rows: Sequence[Mapping[str, Any]],
+    *,
+    duration_sec: float | None = None,
 ) -> None:
     """
     Обновляет или создаёт запись source_health по покрытию rows.
@@ -81,6 +122,7 @@ def upsert_source_health(
         source_name: Имя источника.
         source_url: URL.
         rows: Те же данные, что ушли в replace_normalized_offers.
+        duration_sec: Длительность загрузки в секундах (опционально).
     """
     cov = coverage_from_rows(list(rows))
     row = session.execute(
@@ -102,6 +144,8 @@ def upsert_source_health(
     row.brand_pct = cov.brand_pct
     row.usable_score = cov.usable_score
     row.updated_at = datetime.utcnow()
+    row.last_error = None
+    row.last_fetch_duration_sec = duration_sec
     logger.info(
         "source_health %s: rows=%s usable=%.3f",
         source_name,

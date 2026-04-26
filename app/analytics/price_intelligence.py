@@ -47,9 +47,22 @@ class MarketPosition:
 
 
 def our_pricing_source() -> str:
-    """Источник, который считаем 'нашим' для сравнения (env или EKF)."""
+    """
+    Источник «нашего» прайса для KPI.
+
+    Приоритет: ``OUR_PRICING_SOURCE``, иначе первый элемент ``OUR_PRICING_SOURCE_PRIORITY``
+    (список через запятую), иначе ``EKF YML`` для обратной совместимости.
+    """
     v = (os.getenv("OUR_PRICING_SOURCE") or "").strip()
-    return v or "EKF YML"
+    if v:
+        return v
+    pri = (os.getenv("OUR_PRICING_SOURCE_PRIORITY") or "").strip()
+    if pri:
+        for part in pri.split(","):
+            name = part.strip()
+            if name:
+                return name
+    return "EKF YML"
 
 
 def min_usable_for_kpi() -> float:

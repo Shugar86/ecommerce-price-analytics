@@ -20,6 +20,8 @@
                 <th>Штрихкод %</th>
                 <th>Бренд %</th>
                 <th>Usable</th>
+                <th>Длит. с</th>
+                <th>Ошибка</th>
                 <th>Статус</th>
             </tr>
         </thead>
@@ -34,8 +36,14 @@
             <td>{% if s.barcode_pct is not none %}{{ "%.0f"|format(s.barcode_pct) }}{% else %}—{% endif %}</td>
             <td>{% if s.brand_pct is not none %}{{ "%.0f"|format(s.brand_pct) }}{% else %}—{% endif %}</td>
             <td>{% if s.usable_score is not none %}{{ "%.2f"|format(s.usable_score) }}{% else %}—{% endif %}</td>
+            <td class="muted">{% if s.last_fetch_duration_sec is not none %}{{ "%.1f"|format(s.last_fetch_duration_sec) }}{% else %}—{% endif %}</td>
+            <td class="muted" style="max-width:180px;word-break:break-all;">{{ s.last_error or "—" }}</td>
             <td>
-                {% if s.usable_score is not none and s.usable_score < 0.5 %}
+                {% if s.last_error %}
+                <span class="badge badge-warning">Error</span>
+                {% elif s.total_rows is none or s.total_rows == 0 %}
+                <span class="badge badge-warning">Empty</span>
+                {% elif s.usable_score is not none and s.usable_score < 0.5 %}
                 <span class="badge badge-warning">Low</span>
                 {% else %}
                 <span class="badge badge-success">OK</span>

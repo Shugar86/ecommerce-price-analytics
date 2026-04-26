@@ -38,9 +38,9 @@ from app.database import (
     dispose_engine,
     get_engine,
     get_session,
-    init_db,
 )
 from app.analytics.price_intelligence import load_market_rows, our_pricing_source
+from app.matching.source_pairs import parse_ai_match_source_pairs
 from app.web.services import (
     build_dashboard_template_context,
     list_source_health_rows,
@@ -118,10 +118,10 @@ router = APIRouter(dependencies=[Depends(require_web_auth)])
 async def _lifespan(app: FastAPI):
     """Инициализация схемы БД при старте контейнера и освобождение пула при остановке."""
     try:
-        engine = get_engine()
-        init_db(engine)
+        # Схему и Alembic применяет collector; здесь только прогрев пула.
+        get_engine()
     except Exception as exc:
-        logger.warning("Стартовая инициализация БД: %s", exc)
+        logger.warning("Стартовое подключение к БД: %s", exc)
     yield
     dispose_engine()
 
@@ -394,6 +394,7 @@ def matches_page(request: Request, session: SessionDep) -> HTMLResponse:
             "rejected_n": rejected_n,
             "ai_match_left": os.getenv("AI_MATCH_NORMALIZED_LEFT", "EKF YML"),
             "ai_match_right": os.getenv("AI_MATCH_NORMALIZED_RIGHT", "TDM Electric"),
+            "ai_match_pairs": parse_ai_match_source_pairs(),
         },
     )
 

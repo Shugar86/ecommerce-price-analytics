@@ -8,17 +8,18 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
 
-from alembic import command
-from alembic.config import Config
 from dotenv import load_dotenv
 from sqlalchemy import (
     String,
+    Text,
     Float,
     DateTime,
     Boolean,
@@ -292,6 +293,8 @@ class SourceHealth(Base):
         usable_score: Взвешенный score для участия в рыночных KPI.
         source_url: URL фида (для UI).
         updated_at: Время обновления записи.
+        last_error: Текст последней ошибки загрузки (или None при успехе).
+        last_fetch_duration_sec: Длительность последней попытки загрузки в секундах.
     """
 
     __tablename__ = "source_health"
@@ -309,6 +312,28 @@ class SourceHealth(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+    last_error: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    last_fetch_duration_sec: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class OwwaListing(Base):
+    """
+    Снимок цены с площадки (OWWA, Tier C); не заменяет B2B normalized_offers.
+    """
+
+    __tablename__ = "owwa_listings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    platform_label: Mapped[str] = mapped_column(String(80), nullable=False)
+    product_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    price_rub: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    currency_id: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    external_item_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+    raw_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class NormalizedOffer(Base):
@@ -458,15 +483,51 @@ def dispose_engine() -> None:
 
 
 def _run_alembic_upgrade() -> None:
-    """Применяет миграции Alembic до head (путь относительно корня репозитория)."""
+    """Применяет миграции Alembic до head.
+
+    Через отдельный subprocess: in-process ``command.upgrade`` после ``create_all``
+    на том же пуле в Docker иногда ведёт к зависанию миграций; subprocess изолирует
+    сессии Alembic от движка collector/web.
+    """
     root = Path(__file__).resolve().parent.parent
     ini_path = root / "alembic.ini"
     if not ini_path.is_file():
         logger.warning("Файл alembic.ini не найден: %s — пропуск миграций.", ini_path)
         return
-    cfg = Config(str(ini_path))
-    cfg.set_main_option("sqlalchemy.url", get_database_url())
-    command.upgrade(cfg, "head")
+    cmd = [
+        sys.executable,
+        "-m",
+        "alembic",
+        "-c",
+        str(ini_path),
+        "upgrade",
+        "head",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+            env={**os.environ},
+        )
+        if proc.returncode != 0:
+            msg_out = (proc.stdout or "")[-3000:]
+            msg_err = (proc.stderr or "")[-3000:]
+            logger.warning(
+                "Alembic subprocess code=%s stdout_tail=%r stderr_tail=%r",
+                proc.returncode,
+                msg_out,
+                msg_err,
+            )
+        else:
+            logger.info("Alembic upgrade (subprocess) применён.")
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("Alembic: превышен таймаут 300 с: %s", exc)
+    except OSError as exc:
+        logger.warning("Alembic subprocess: %s", exc)
 
 
 def init_db(engine: Engine) -> None:

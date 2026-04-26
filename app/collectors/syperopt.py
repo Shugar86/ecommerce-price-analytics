@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from io import BytesIO
 from typing import Any, Optional
 
@@ -14,7 +16,12 @@ from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.collectors.normalized_io import replace_normalized_offers, upsert_source_health
+from app.collectors.compat_env import env_int
+from app.collectors.normalized_io import (
+    record_source_health_failure,
+    replace_normalized_offers,
+    upsert_source_health,
+)
 from app.collectors.xls_common import (
     first_barcode,
     guess_vendor_code,
@@ -205,11 +212,16 @@ def _iter_syperopt_rows_impl(ws: Worksheet) -> list[dict[str, Any]]:
 
 def fetch_syperopt_offers(session: Session) -> None:
     """Скачивает XLSX Syperopt и пишет в normalized_offers."""
+    t_conn = env_int("SYPEROPT_TIMEOUT_CONNECT", 20)
+    t_read = env_int("SYPEROPT_TIMEOUT_READ", 900)
+    max_rows = env_int("SYPEROPT_MAX_ROWS", 0)
+    source_name = "Syperopt XLSX"
+    t0 = time.perf_counter()
     try:
         logger.info("Syperopt: загрузка XLSX")
         response = requests.get(
             SYPEROPT_XLSX_URL,
-            timeout=(15, 600),
+            timeout=(t_conn, t_read),
             headers={"User-Agent": "PriceDesk-Collector/1.0"},
         )
         response.raise_for_status()
@@ -218,28 +230,71 @@ def fetch_syperopt_offers(session: Session) -> None:
         try:
             ws = wb.active
             if ws is None:
+                session.rollback()
+                record_source_health_failure(
+                    session,
+                    source_name,
+                    SYPEROPT_XLSX_URL,
+                    "xlsx: no active sheet",
+                    duration_sec=time.perf_counter() - t0,
+                )
+                session.commit()
                 return
             rows = iter_syperopt_rows(ws)
         finally:
             wb.close()
-        source_name = "Syperopt XLSX"
+        if max_rows > 0 and len(rows) > max_rows:
+            rows = rows[:max_rows]
         replace_normalized_offers(
             session, source_name, SYPEROPT_XLSX_URL, rows, loaded_at=None
         )
+        duration = time.perf_counter() - t0
         upsert_source_health(
-            session, source_name, SYPEROPT_XLSX_URL, rows
+            session, source_name, SYPEROPT_XLSX_URL, rows, duration_sec=duration
         )
         session.commit()
         logger.info("Syperopt: сохранено %s строк", len(rows))
     except requests.RequestException as e:
         logger.error("Syperopt: HTTP: %s", e)
         session.rollback()
+        record_source_health_failure(
+            session,
+            source_name,
+            SYPEROPT_XLSX_URL,
+            f"HTTP: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()
     except (OSError, ValueError) as e:
         logger.error("Syperopt: файл: %s", e)
         session.rollback()
+        record_source_health_failure(
+            session,
+            source_name,
+            SYPEROPT_XLSX_URL,
+            f"file: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()
     except SQLAlchemyError as e:
         logger.error("Syperopt: БД: %s", e)
         session.rollback()
+        record_source_health_failure(
+            session,
+            source_name,
+            SYPEROPT_XLSX_URL,
+            f"db: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()
     except Exception as e:
         logger.error("Syperopt: %s", e)
         session.rollback()
+        record_source_health_failure(
+            session,
+            source_name,
+            SYPEROPT_XLSX_URL,
+            f"{type(e).__name__}: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()

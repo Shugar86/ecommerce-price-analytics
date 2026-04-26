@@ -9,6 +9,7 @@ ETL-процесс для сбора данных о ценах товаров �
 - Сбор каталога EKF (YML/XML)
 """
 
+import json
 import logging
 import os
 import signal
@@ -26,14 +27,24 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.analytics.canonical_sync import rebuild_canonical_from_normalized
 from app.collectors.barcode_enrich import enrich_normalized_offers_from_reference
+from app.collectors.barcodes_catalog_api import enrich_offers_gaps_from_api
+from app.collectors.owwa import run_owwa_ingest_stub
 from app.collectors.complect_service import fetch_complect_offers
 from app.collectors.normalized_io import (
+    record_source_health_failure,
     replace_normalized_offers,
     upsert_source_health,
 )
 from app.collectors.syperopt import fetch_syperopt_offers
 from app.collectors.xls_common import iter_xls_tdm_rows
-from app.database import get_engine, init_db, get_session, ExchangeRate, Product
+from app.database import (
+    ExchangeRate,
+    Product,
+    SourceHealth,
+    get_engine,
+    get_session,
+    init_db,
+)
 from app.matching.text import normalize_name_for_search
 from app.price_history_util import record_price_change
 
@@ -43,6 +54,35 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Читает int из окружения; пустая строка (часто из docker-compose) = default."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return int(str(raw).strip(), 10)
+
+
+def _log_etl_source_summary(session) -> None:
+    """
+    Сводка по source_health после цикла (лог-строка JSON для парсинга/мониторинга).
+    """
+    rows = list(
+        session.execute(select(SourceHealth).order_by(SourceHealth.source_name)).scalars()
+    )
+    d = {
+        r.source_name: {
+            "rows": r.total_rows,
+            "usable": r.usable_score,
+            "error": r.last_error,
+            "duration_s": r.last_fetch_duration_sec,
+        }
+        for r in rows
+    }
+    logger.info(
+        "ETL_SOURCE_HEALTH_SUMMARY %s", json.dumps(d, ensure_ascii=False, default=str)
+    )
 
 # Константы для источников данных
 CBR_API_URL = "http://www.cbr.ru/scripts/XML_daily.asp"
@@ -55,7 +95,7 @@ EKF_YML_URL = "https://export-xml.storage.yandexcloud.net/products.yml"
 # Настройки сбора данных
 # Сколько товаров грузить с каждого магазина (для очень больших фидов).
 # 0 = без лимита (может быть очень долго на больших YML)
-SHOP_ITEM_LIMIT = int(os.getenv("SHOP_ITEM_LIMIT", "20000"))
+SHOP_ITEM_LIMIT = _env_int("SHOP_ITEM_LIMIT", 20000)
 
 # Эти ключевые слова дальше используются ботом в /compare (защита от "магнитов"),
 # но сборщик больше не фильтрует по ним (грузим весь каталог/лимит).
@@ -588,10 +628,12 @@ def fetch_ekf_goods(session) -> None:
 
     Загружает весь каталог (или ограничение SHOP_ITEM_LIMIT, если задано).
     """
+    t_ekf0 = time.perf_counter()
     try:
         logger.info("🏭 Начинаем сбор товаров EKF (YML Stream)...")
-
-        response = _fetch_yml_stream(EKF_YML_URL, timeout=(10, 180))
+        t_conn = _env_int("EKF_TIMEOUT_CONNECT", 10)
+        t_read = _env_int("EKF_TIMEOUT_READ", 240)
+        response = _fetch_yml_stream(EKF_YML_URL, timeout=(t_conn, t_read))
         saved_count = 0
         norm_rows: list[dict[str, Any]] = []
 
@@ -653,19 +695,49 @@ def fetch_ekf_goods(session) -> None:
         replace_normalized_offers(
             session, "EKF YML", EKF_YML_URL, norm_rows, loaded_at=None
         )
-        upsert_source_health(session, "EKF YML", EKF_YML_URL, norm_rows)
+        upsert_source_health(
+            session,
+            "EKF YML",
+            EKF_YML_URL,
+            norm_rows,
+            duration_sec=time.perf_counter() - t_ekf0,
+        )
         session.commit()
         logger.info(f"✅ Успешно сохранено товаров от EKF: {saved_count}")
 
     except requests.RequestException as e:
         logger.error(f"❌ Ошибка при запросе к EKF: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "EKF YML",
+            EKF_YML_URL,
+            f"HTTP: {e}",
+            duration_sec=time.perf_counter() - t_ekf0,
+        )
+        session.commit()
     except etree.XMLSyntaxError as e:
         logger.error(f"❌ Ошибка парсинга YML от EKF: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "EKF YML",
+            EKF_YML_URL,
+            f"parse: {e}",
+            duration_sec=time.perf_counter() - t_ekf0,
+        )
+        session.commit()
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка при получении товаров EKF: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "EKF YML",
+            EKF_YML_URL,
+            f"{type(e).__name__}: {e}",
+            duration_sec=time.perf_counter() - t_ekf0,
+        )
+        session.commit()
 
 
 def fetch_tdm_goods_from_xls(session) -> None:
@@ -684,9 +756,11 @@ def fetch_tdm_goods_from_xls(session) -> None:
         logger.error("❌ Не установлен xlrd. Добавьте xlrd в requirements и пересоберите контейнер.")
         return
 
+    t_tdm0 = time.perf_counter()
+    tdm_to = _env_int("TDM_TIMEOUT_SEC", 120)
     try:
         logger.info("🏭 Начинаем сбор прайс-листа TDM (XLS)...")
-        response = requests.get(TDM_PRICE_XLS_URL, timeout=60)
+        response = requests.get(TDM_PRICE_XLS_URL, timeout=tdm_to)
         response.raise_for_status()
 
         book = xlrd.open_workbook(file_contents=response.content)
@@ -695,6 +769,14 @@ def fetch_tdm_goods_from_xls(session) -> None:
         header_row_idx, header_map = _tdm_find_header_row(sheet)
         if header_row_idx is None:
             logger.error("❌ Не удалось найти строку заголовков в XLS TDM (первые 50 строк).")
+            record_source_health_failure(
+                session,
+                "TDM Electric",
+                TDM_PRICE_XLS_URL,
+                "XLS: header row not found in first 50 rows",
+                duration_sec=time.perf_counter() - t_tdm0,
+            )
+            session.commit()
             return
 
         col_name, col_price, col_vendor, col_barcode = _tdm_map_columns(header_map)
@@ -704,6 +786,14 @@ def fetch_tdm_goods_from_xls(session) -> None:
                 "❌ В XLS TDM не найдены обязательные колонки name/price. "
                 f"name={col_name}, price={col_price}, vendor={col_vendor}, barcode={col_barcode}"
             )
+            record_source_health_failure(
+                session,
+                "TDM Electric",
+                TDM_PRICE_XLS_URL,
+                "XLS: required columns name/price not found",
+                duration_sec=time.perf_counter() - t_tdm0,
+            )
+            session.commit()
             return
 
         col_barcode = _tdm_guess_barcode_column(
@@ -735,7 +825,11 @@ def fetch_tdm_goods_from_xls(session) -> None:
             session, "TDM Electric", TDM_PRICE_XLS_URL, tdm_norm, loaded_at=None
         )
         upsert_source_health(
-            session, "TDM Electric", TDM_PRICE_XLS_URL, tdm_norm
+            session,
+            "TDM Electric",
+            TDM_PRICE_XLS_URL,
+            tdm_norm,
+            duration_sec=time.perf_counter() - t_tdm0,
         )
         session.commit()
         logger.info(f"✅ Успешно сохранено {saved} товаров от TDM Electric (XLS)")
@@ -743,9 +837,25 @@ def fetch_tdm_goods_from_xls(session) -> None:
     except requests.RequestException as e:
         logger.error(f"❌ Ошибка при запросе к TDM XLS: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "TDM Electric",
+            TDM_PRICE_XLS_URL,
+            f"HTTP: {e}",
+            duration_sec=time.perf_counter() - t_tdm0,
+        )
+        session.commit()
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка при разборе XLS TDM: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "TDM Electric",
+            TDM_PRICE_XLS_URL,
+            f"{type(e).__name__}: {e}",
+            duration_sec=time.perf_counter() - t_tdm0,
+        )
+        session.commit()
 
 
 def fetch_currency(session) -> None:
@@ -908,7 +1018,8 @@ def fetch_russian_goods(session) -> None:
     Получает информацию о российских товарах от TBM Market (YML формат).
     
     Использует потоковый парсинг (streaming) для обработки больших XML-файлов
-    без полной загрузки в память. Обрабатывает первые N товаров из фида.
+    без полной загрузки в память.     Обрабатывает первые N товаров из фида.
+    Дублирует срез в ``normalized_offers`` / ``source_health`` (``TBM Market``), как EKF YML.
     
     Args:
         session: Сессия SQLAlchemy для работы с БД.
@@ -917,6 +1028,7 @@ def fetch_russian_goods(session) -> None:
         requests.RequestException: При ошибке HTTP-запроса.
         etree.XMLSyntaxError: При ошибке парсинга YML.
     """
+    t0 = time.perf_counter()
     try:
         logger.info("🏪 Начинаем сбор российских товаров от TBM Market (YML Stream)...")
         
@@ -929,6 +1041,7 @@ def fetch_russian_goods(session) -> None:
         
         # Потоковый парсинг XML через iterparse (memory-efficient)
         saved_count = 0
+        norm_rows: list[dict[str, Any]] = []
         context = etree.iterparse(
             response.raw,
             events=('end',),
@@ -967,6 +1080,17 @@ def fetch_russian_goods(session) -> None:
                     external_id=external_id,
                     source_shop="TBM Market",
                 )
+                norm_rows.append(
+                    {
+                        "name": row["name"],
+                        "price_rub": row["price_rub"],
+                        "vendor_code": row.get("vendor_code"),
+                        "barcode": row.get("barcode"),
+                        "category": row.get("category_id"),
+                        "url": row.get("url"),
+                        "external_id": external_id,
+                    }
+                )
                 saved_count += 1
 
                 # Очистка элемента из памяти (важно для streaming)
@@ -978,19 +1102,52 @@ def fetch_russian_goods(session) -> None:
         
         # Очистка контекста парсера
         del context
-        
+        replace_normalized_offers(
+            session, "TBM Market", TBM_MARKET_YML_URL, norm_rows, loaded_at=None
+        )
+        upsert_source_health(
+            session,
+            "TBM Market",
+            TBM_MARKET_YML_URL,
+            norm_rows,
+            duration_sec=time.perf_counter() - t0,
+        )
         session.commit()
         logger.info(f"✅ Успешно сохранено товаров от TBM Market: {saved_count}")
         
     except requests.RequestException as e:
         logger.error(f"❌ Ошибка при запросе к TBM Market: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "TBM Market",
+            TBM_MARKET_YML_URL,
+            f"HTTP: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()
     except etree.XMLSyntaxError as e:
         logger.error(f"❌ Ошибка парсинга YML от TBM Market: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "TBM Market",
+            TBM_MARKET_YML_URL,
+            f"parse: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка при получении российских товаров: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "TBM Market",
+            TBM_MARKET_YML_URL,
+            f"{type(e).__name__}: {e}",
+            duration_sec=time.perf_counter() - t0,
+        )
+        session.commit()
 
 
 def fetch_galacentre_goods(session) -> None:
@@ -998,7 +1155,9 @@ def fetch_galacentre_goods(session) -> None:
     Получает товары из Гала-Центра (YML), без API-ключа.
 
     Загружает весь каталог (или ограничение SHOP_ITEM_LIMIT, если задано).
+    Дублирует срез в ``normalized_offers`` / ``source_health`` (``GalaCentre``), как TBM/EKF.
     """
+    t_outer = time.perf_counter()
     try:
         logger.info("🏪 Начинаем сбор российских товаров от GalaCentre (YML Stream)...")
 
@@ -1012,8 +1171,10 @@ def fetch_galacentre_goods(session) -> None:
         for attempt in range(1, max_attempts + 1):
             saved_count = 0
             pending_writes = 0
+            norm_rows: list[dict[str, Any]] = []
 
             try:
+                t_gala0 = time.perf_counter()
                 response = requests.get(
                     GALACENTRE_YML_URL,
                     headers=headers,
@@ -1060,6 +1221,17 @@ def fetch_galacentre_goods(session) -> None:
                             external_id=external_id,
                             source_shop="GalaCentre",
                         )
+                        norm_rows.append(
+                            {
+                                "name": row["name"],
+                                "price_rub": row["price_rub"],
+                                "vendor_code": row.get("vendor_code"),
+                                "barcode": row.get("barcode"),
+                                "category": row.get("category_id"),
+                                "url": row.get("url"),
+                                "external_id": external_id,
+                            }
+                        )
                         pending_writes += 1
                         saved_count += 1
 
@@ -1076,6 +1248,17 @@ def fetch_galacentre_goods(session) -> None:
                 del context
                 if pending_writes:
                     session.commit()
+                replace_normalized_offers(
+                    session, "GalaCentre", GALACENTRE_YML_URL, norm_rows, loaded_at=None
+                )
+                upsert_source_health(
+                    session,
+                    "GalaCentre",
+                    GALACENTRE_YML_URL,
+                    norm_rows,
+                    duration_sec=time.perf_counter() - t_gala0,
+                )
+                session.commit()
 
                 logger.info(
                     f"✅ Успешно сохранено товаров от GalaCentre: {saved_count}"
@@ -1096,17 +1279,49 @@ def fetch_galacentre_goods(session) -> None:
                     continue
 
                 logger.error(f"❌ Не удалось загрузить GalaCentre после {max_attempts} попыток: {e}")
+                record_source_health_failure(
+                    session,
+                    "GalaCentre",
+                    GALACENTRE_YML_URL,
+                    f"after {max_attempts} attempts: {e}",
+                    duration_sec=time.perf_counter() - t_gala0,
+                )
+                session.commit()
                 break
 
     except requests.RequestException as e:
         logger.error(f"❌ Ошибка при запросе к GalaCentre: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "GalaCentre",
+            GALACENTRE_YML_URL,
+            f"HTTP: {e}",
+            duration_sec=time.perf_counter() - t_outer,
+        )
+        session.commit()
     except etree.XMLSyntaxError as e:
         logger.error(f"❌ Ошибка парсинга YML от GalaCentre: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "GalaCentre",
+            GALACENTRE_YML_URL,
+            f"parse: {e}",
+            duration_sec=time.perf_counter() - t_outer,
+        )
+        session.commit()
     except Exception as e:
         logger.error(f"❌ Неожиданная ошибка при получении товаров GalaCentre: {e}")
         session.rollback()
+        record_source_health_failure(
+            session,
+            "GalaCentre",
+            GALACENTRE_YML_URL,
+            f"{type(e).__name__}: {e}",
+            duration_sec=time.perf_counter() - t_outer,
+        )
+        session.commit()
 
 
 def collect_all_data(session) -> None:
@@ -1156,10 +1371,23 @@ def collect_all_data(session) -> None:
     except (SQLAlchemyError, ValueError, OSError) as e:
         logger.warning("barcode enrich: %s", e)
     try:
+        enrich_offers_gaps_from_api(session)
+    except (SQLAlchemyError, ValueError, OSError) as e:
+        logger.warning("barcodes catalog api: %s", e)
+    try:
+        run_owwa_ingest_stub(session)
+    except (SQLAlchemyError, ValueError, OSError) as e:
+        logger.warning("owwa ingest: %s", e)
+        session.rollback()
+    try:
         rebuild_canonical_from_normalized(session)
     except (SQLAlchemyError, ValueError, OSError) as e:
         logger.error("canonical sync: %s", e)
-    
+    try:
+        _log_etl_source_summary(session)
+    except (SQLAlchemyError, TypeError) as e:
+        logger.warning("ETL source summary: %s", e)
+
     logger.info("=" * 60)
     logger.info("✅ Цикл сбора данных завершен")
     logger.info("=" * 60)

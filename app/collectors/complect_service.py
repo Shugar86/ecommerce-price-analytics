@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from typing import Any
 
 import requests
@@ -12,7 +14,12 @@ import xlrd
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.collectors.normalized_io import replace_normalized_offers, upsert_source_health
+from app.collectors.compat_env import env_int
+from app.collectors.normalized_io import (
+    record_source_health_failure,
+    replace_normalized_offers,
+    upsert_source_health,
+)
 from app.collectors.xls_common import (
     first_barcode,
     guess_vendor_code,
@@ -92,13 +99,17 @@ def fetch_complect_offers(session: Session) -> None:
 
     Бренд подставляется из ключа COMPLECT_URLS (кроме Full — бренд из строки, если нет).
     """
+    t_conn = env_int("COMPLECT_TIMEOUT_CONNECT", 20)
+    t_read = env_int("COMPLECT_TIMEOUT_READ", 600)
+    max_rows = env_int("COMPLECT_MAX_ROWS", 0)
     for label, url in COMPLECT_URLS.items():
         source_name = f"Complect {label}"
+        t0 = time.perf_counter()
         try:
             logger.info("Complect: загрузка %s", label)
             response = requests.get(
                 url,
-                timeout=(15, 300),
+                timeout=(t_conn, t_read),
                 headers={"User-Agent": "PriceDesk-Collector/1.0"},
             )
             response.raise_for_status()
@@ -110,21 +121,58 @@ def fetch_complect_offers(session: Session) -> None:
                 d = dict(row)
                 d["external_id"] = f"complect_{label}_{i}"
                 rows.append(d)
+            if max_rows > 0 and len(rows) > max_rows:
+                rows = rows[:max_rows]
             replace_normalized_offers(
                 session, source_name, url, rows, loaded_at=None
             )
-            upsert_source_health(session, source_name, url, rows)
+            duration = time.perf_counter() - t0
+            upsert_source_health(
+                session, source_name, url, rows, duration_sec=duration
+            )
             session.commit()
             logger.info("Complect: сохранено %s строк (%s)", len(rows), label)
         except requests.RequestException as e:
             logger.error("Complect: HTTP %s: %s", label, e)
             session.rollback()
+            record_source_health_failure(
+                session,
+                source_name,
+                url,
+                f"HTTP: {e}",
+                duration_sec=time.perf_counter() - t0,
+            )
+            session.commit()
         except (xlrd.XLRDError, ValueError) as e:
             logger.error("Complect: парсинг %s: %s", label, e)
             session.rollback()
+            record_source_health_failure(
+                session,
+                source_name,
+                url,
+                f"parse: {e}",
+                duration_sec=time.perf_counter() - t0,
+            )
+            session.commit()
         except SQLAlchemyError as e:
             logger.error("Complect: БД %s: %s", label, e)
             session.rollback()
+            record_source_health_failure(
+                session,
+                source_name,
+                url,
+                f"db: {e}",
+                duration_sec=time.perf_counter() - t0,
+            )
+            session.commit()
         except Exception as e:
             logger.error("Complect: %s: %s", label, e)
             session.rollback()
+            record_source_health_failure(
+                session,
+                source_name,
+                url,
+                f"{type(e).__name__}: {e}",
+                duration_sec=time.perf_counter() - t0,
+            )
+            session.commit()

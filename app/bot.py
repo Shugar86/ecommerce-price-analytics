@@ -18,7 +18,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from dotenv import load_dotenv
 from sqlalchemy import select, func
 
-from app.database import get_engine, init_db, get_session, ExchangeRate, Product
+from app.database import get_engine, get_session, ExchangeRate, Product
 from app.matching.text import item_type, name_only_score
 from app.services.product_queries import (
     compare_top_by_shops,
@@ -628,10 +628,9 @@ async def main() -> None:
             "Получите токен у @BotFather в Telegram."
         )
     
-    # Инициализация БД (создание таблиц, если их нет)
+    # Схема — через `collector` (init_db + Alembic), здесь только проверка пула
     try:
         engine = get_engine()
-        init_db(engine)
         logger.info("✅ Подключение к БД установлено")
     except Exception as e:
         logger.critical(f"❌ Ошибка подключения к БД: {e}")

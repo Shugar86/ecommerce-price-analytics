@@ -13,6 +13,7 @@ from app.database import (
     MATCH_STATUS_CONFIRMED,
     MATCH_STATUS_REJECTED,
     MATCH_STATUS_SUGGESTED,
+    NormalizedOffer,
     NormalizedOfferMatch,
     PriceAnomaly,
     PriceHistory,
@@ -40,19 +41,20 @@ def list_source_health_rows(session: Session) -> list[SourceHealth]:
 
 def build_dashboard_template_context(session: Session) -> dict[str, Any]:
     """Template context for ``dashboard.html`` (excluding ``request``)."""
-    total = session.scalar(select(func.count(Product.id))) or 0
+    # Норм. слой ETL: то же, что /sources (FakeStore / legacy-магазины сюда не входят)
+    total = session.scalar(select(func.count(NormalizedOffer.id))) or 0
     shops = session.execute(
-        select(Product.source_shop, func.count(Product.id))
-        .group_by(Product.source_shop)
-        .order_by(func.count(Product.id).desc())
+        select(NormalizedOffer.source_name, func.count(NormalizedOffer.id))
+        .group_by(NormalizedOffer.source_name)
+        .order_by(func.count(NormalizedOffer.id).desc())
     ).all()
-    last_upd = session.scalar(select(func.max(Product.updated_at)))
+    last_upd = session.scalar(select(func.max(NormalizedOffer.loaded_at)))
     price_stats = session.execute(
         select(
-            func.min(Product.price_in_rub),
-            func.max(Product.price_in_rub),
-            func.avg(Product.price_in_rub),
-        )
+            func.min(NormalizedOffer.price_rub),
+            func.max(NormalizedOffer.price_rub),
+            func.avg(NormalizedOffer.price_rub),
+        ).where(NormalizedOffer.price_rub.isnot(None))
     ).one()
     anomalies_n = session.scalar(select(func.count(PriceAnomaly.id))) or 0
     matches_suggested_n = int(

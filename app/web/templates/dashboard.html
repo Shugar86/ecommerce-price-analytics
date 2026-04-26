@@ -9,7 +9,7 @@
     <h1>Сегодня: действия</h1>
     <div class="page-subtitle">
         Price intelligence: сигналы к цене, ручной ревью сопоставлений, здоровье источников. Наш прайс: <code>{{ our_pricing_source }}</code>
-        {% if last_update %} · products обновлён {{ last_update.strftime("%d.%m.%Y %H:%M") }} UTC{% endif %}
+        {% if last_update %} · норм. слой (collector) {{ last_update.strftime("%d.%m.%Y %H:%M") }} UTC{% endif %}
     </div>
 </div>
 
@@ -36,10 +36,10 @@
 {# ─── KPI row ─── #}
 <div class="kpi-grid">
     <div class="kpi-card">
-        <div class="kpi-label">Товаров в базе</div>
+        <div class="kpi-label">Офферов (норм. слой)</div>
         <div class="kpi-value kv-accent">{{ total_products }}</div>
         <div class="kpi-sub">
-            {{ shops_n }} {% if shops_n == 1 %}источник{% elif shops_n in [2, 3, 4] %}источника{% else %}источников{% endif %}
+            {{ shops_n }} {% if shops_n == 1 %}источник{% elif shops_n in [2, 3, 4] %}источника{% else %}источников{% endif %} (ETL)
         </div>
     </div>
     <div class="kpi-card">
@@ -90,7 +90,7 @@
 {# ─── Charts ─── #}
 <div class="grid-2">
     <div class="card">
-        <div class="card-title">Товаров по источникам</div>
+        <div class="card-title">Офферов по источникам (норм. слой)</div>
         {% if shops %}
         <canvas id="shopsChart" height="160"></canvas>
         {% else %}
@@ -112,12 +112,12 @@
     <div class="card-header">
         <div class="card-title">Источники данных</div>
         {% if last_update %}
-        <span class="muted">обновлено {{ last_update.strftime("%d.%m %H:%M") }} UTC</span>
+        <span class="muted">норм. слой, {{ last_update.strftime("%d.%m %H:%M") }} UTC</span>
         {% endif %}
     </div>
     {% if shops %}
     <table>
-        <thead><tr><th>Источник</th><th>Товаров</th></tr></thead>
+        <thead><tr><th>Источник</th><th>Офферов</th></tr></thead>
         <tbody>
         {% for name, cnt in shops %}
         <tr><td>{{ name }}</td><td>{{ cnt }}</td></tr>
@@ -234,7 +234,7 @@
             type: 'bar',
             data: {
                 labels: shopLabels,
-                datasets: [{ label: 'Товаров', data: shopCounts, backgroundColor: accent, borderRadius: 4 }]
+                datasets: [{ label: 'Офферов (норм. слой)', data: shopCounts, backgroundColor: accent, borderRadius: 4 }]
             },
             options: { responsive: true, plugins: { legend: { display: false } }, scales: baseScales }
         });

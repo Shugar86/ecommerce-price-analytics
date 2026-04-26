@@ -5,9 +5,14 @@
 <div class="page-header">
     <h1>Ассистент сопоставления</h1>
     <div class="page-subtitle">
-        Основной контур: пары <strong>normalized_offers</strong> ({{ ai_match_left }} ↔ {{ ai_match_right }}), fuzzy TF-IDF из <code>match_pair</code> — только для ручного ревью.
-        Ниже — опциональный legacy-режим по карточкам <code>products</code> (<code>USE_LEGACY_PRODUCT_MATCHING=1</code> в воркере).
+        Контур: пары <strong>normalized_offers</strong> по списку из <code>AI_MATCH_SOURCE_PAIRS</code> (см. ниже) или <code>AI_MATCH_NORMALIZED_LEFT|RIGHT</code>; fuzzy из <code>match_pair</code> — только для ручного ревью.
+        Опционально: legacy по <code>products</code> (<code>USE_LEGACY_PRODUCT_MATCHING=1</code>).
     </div>
+    <p class="muted" style="margin-top:0.5rem">
+        {% for L, R in ai_match_pairs %}
+        <code>{{ L }}</code> ↔ <code>{{ R }}</code>{% if not loop.last %}; {% endif %}
+        {% endfor %}
+    </p>
 </div>
 
 {# ─── Normalized offers (primary) ─── #}

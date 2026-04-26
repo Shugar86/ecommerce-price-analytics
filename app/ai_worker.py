@@ -29,8 +29,8 @@ from app.database import (
     ProductMatch,
     get_engine,
     get_session,
-    init_db,
 )
+from app.matching.source_pairs import parse_ai_match_source_pairs
 from app.ml.anomalies import detect_price_anomalies
 from app.ml.matching import match_pair
 from app.ml.tfidf_pairs import filter_greedy_one_to_one, find_cross_shop_pairs
@@ -41,18 +41,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-AI_INTERVAL_SEC = int(os.getenv("AI_WORKER_INTERVAL_SEC", "300"))
-MATCH_LIMIT_PER_SHOP = int(os.getenv("AI_MATCH_LIMIT_PER_SHOP", "500"))
+
+def _env_int(name: str, default: int) -> int:
+    """Парсит int из env; пустая строка и отсутствие ключа = default (как в docker-compose)."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return int(str(raw).strip(), 10)
+
+
+def _env_float(name: str, default: float) -> float:
+    """Парсит float из env; пустая строка = default."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return float(str(raw).strip().replace(",", "."))
+
+
+AI_INTERVAL_SEC = _env_int("AI_WORKER_INTERVAL_SEC", 300)
+MATCH_LIMIT_PER_SHOP = _env_int("AI_MATCH_LIMIT_PER_SHOP", 500)
 # TF-IDF cosine floor (0–1). Default raised from 0.28 to limit weak title-only links.
 # Scope: EKF vs TDM Electric only; see docs/PRODUCT_SCOPE.md.
-AI_MATCH_MIN_SCORE = float(os.getenv("AI_MATCH_MIN_SCORE", "0.45"))
-FORECAST_MIN_POINTS = int(os.getenv("AI_FORECAST_MIN_POINTS", "5"))
+AI_MATCH_MIN_SCORE = _env_float("AI_MATCH_MIN_SCORE", 0.45)
+FORECAST_MIN_POINTS = _env_int("AI_FORECAST_MIN_POINTS", 5)
 USE_LEGACY_PRODUCT_MATCHING = os.getenv(
     "USE_LEGACY_PRODUCT_MATCHING", ""
 ).strip().lower() in ("1", "true", "yes")
+# Одинарная пара (легаси-совместимость, если AI_MATCH_SOURCE_PAIRS не задан)
 AI_MATCH_NORMALIZED_LEFT = os.getenv("AI_MATCH_NORMALIZED_LEFT", "EKF YML")
 AI_MATCH_NORMALIZED_RIGHT = os.getenv("AI_MATCH_NORMALIZED_RIGHT", "TDM Electric")
-AI_MATCH_OFFER_CAP = int(os.getenv("AI_MATCH_OFFER_CAP", "400"))
+AI_MATCH_OFFER_CAP = _env_int("AI_MATCH_OFFER_CAP", 400)
 
 
 def _history_prices(session: Session, product_id: int, *, limit: int = 40) -> list[float]:
@@ -107,7 +125,6 @@ def _seed_demo_history(session: Session) -> None:
 def run_ai_cycle() -> None:
     """Один проход: очистка старых результатов, расчёт и запись."""
     engine = get_engine()
-    init_db(engine)
     session = get_session(engine)
     try:
         _seed_demo_history(session)
@@ -156,18 +173,7 @@ def run_ai_cycle() -> None:
                     )
                 )
 
-        left_offers = session.scalars(
-            select(NormalizedOffer)
-            .where(NormalizedOffer.source_name == AI_MATCH_NORMALIZED_LEFT)
-            .order_by(NormalizedOffer.id)
-            .limit(MATCH_LIMIT_PER_SHOP)
-        ).all()
-        right_offers = session.scalars(
-            select(NormalizedOffer)
-            .where(NormalizedOffer.source_name == AI_MATCH_NORMALIZED_RIGHT)
-            .order_by(NormalizedOffer.id)
-            .limit(MATCH_LIMIT_PER_SHOP)
-        ).all()
+        source_pairs = parse_ai_match_source_pairs()
 
         existing_offer_pairs = {
             (int(r[0]), int(r[1]))
@@ -180,32 +186,47 @@ def run_ai_cycle() -> None:
         }
 
         offer_pairs_count = 0
-        for a in left_offers:
-            for b in right_offers:
-                if a.id == b.id:
-                    continue
-                res = match_pair(a, b)
-                if res is None or res.is_automated:
-                    continue
-                lo, hi = (int(a.id), int(b.id)) if a.id < b.id else (int(b.id), int(a.id))
-                if (lo, hi) in existing_offer_pairs:
-                    continue
-                session.add(
-                    NormalizedOfferMatch(
-                        offer_low_id=lo,
-                        offer_high_id=hi,
-                        score=float(res.confidence),
-                        method="tfidf_cosine",
-                        match_kind=res.kind,
-                        match_status=MATCH_STATUS_SUGGESTED,
-                    )
-                )
-                existing_offer_pairs.add((lo, hi))
-                offer_pairs_count += 1
-                if offer_pairs_count >= AI_MATCH_OFFER_CAP:
-                    break
+        for left_name, right_name in source_pairs:
             if offer_pairs_count >= AI_MATCH_OFFER_CAP:
                 break
+            left_offers = session.scalars(
+                select(NormalizedOffer)
+                .where(NormalizedOffer.source_name == left_name)
+                .order_by(NormalizedOffer.id)
+                .limit(MATCH_LIMIT_PER_SHOP)
+            ).all()
+            right_offers = session.scalars(
+                select(NormalizedOffer)
+                .where(NormalizedOffer.source_name == right_name)
+                .order_by(NormalizedOffer.id)
+                .limit(MATCH_LIMIT_PER_SHOP)
+            ).all()
+            for a in left_offers:
+                for b in right_offers:
+                    if a.id == b.id:
+                        continue
+                    res = match_pair(a, b)
+                    if res is None or res.is_automated:
+                        continue
+                    lo, hi = (int(a.id), int(b.id)) if a.id < b.id else (int(b.id), int(a.id))
+                    if (lo, hi) in existing_offer_pairs:
+                        continue
+                    session.add(
+                        NormalizedOfferMatch(
+                            offer_low_id=lo,
+                            offer_high_id=hi,
+                            score=float(res.confidence),
+                            method="tfidf_cosine",
+                            match_kind=res.kind,
+                            match_status=MATCH_STATUS_SUGGESTED,
+                        )
+                    )
+                    existing_offer_pairs.add((lo, hi))
+                    offer_pairs_count += 1
+                    if offer_pairs_count >= AI_MATCH_OFFER_CAP:
+                        break
+                if offer_pairs_count >= AI_MATCH_OFFER_CAP:
+                    break
 
         legacy_pairs_count = 0
         ekf_rows: list = []
@@ -271,12 +292,12 @@ def run_ai_cycle() -> None:
             )
 
         session.commit()
+        pairs_desc = source_pairs
         logger.info(
-            "Цикл воркера: история=%s, fuzzy офферов=%s (%s↔%s), legacy Product TF-IDF=%s",
+            "Цикл воркера: история=%s, fuzzy офферов=%s, пары=%s, legacy Product TF-IDF=%s",
             len(pids),
             offer_pairs_count,
-            AI_MATCH_NORMALIZED_LEFT,
-            AI_MATCH_NORMALIZED_RIGHT,
+            pairs_desc,
             legacy_pairs_count,
         )
     except Exception as exc:
