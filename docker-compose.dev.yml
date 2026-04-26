@@ -1,0 +1,11 @@
+# Локальная разработка: доступ к PostgreSQL и Adminer с хоста.
+# Запуск: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  adminer:
+    ports:
+      - "8080:8080"

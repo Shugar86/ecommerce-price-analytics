@@ -1,0 +1,110 @@
+# Микросервисное приложение сбора и визуального анализа цен (e-commerce)
+
+Проект подходит для **ВКР / отчёта по практике**: микросервисная архитектура (Docker), **веб-приложение аналитика** (основной интерфейс), **ИИ-воркер** (аномалии цен, TF-IDF сопоставление, прогноз), Telegram-бот (дополнительный канал).
+
+## Быстрый старт
+
+### 1. Токен Telegram-бота (опционально, для `bot`)
+
+Telegram → @BotFather → `/newbot` → скопируйте токен.
+
+### 2. Переменные окружения
+
+Создайте `.env` в корне (см. **[env.example](env.example)**):
+
+```env
+POSTGRES_USER=courseuser
+POSTGRES_PASSWORD=coursepass
+POSTGRES_DB=prices_db
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+
+BOT_TOKEN=your_token_here_from_botfather
+
+# Демо-точки истории цен для графиков (1/0); ИИ-воркер
+SEED_DEMO_HISTORY=1
+AI_WORKER_INTERVAL_SEC=300
+```
+
+### 3. Запуск
+
+```bash
+docker compose up -d --build
+```
+
+По умолчанию **PostgreSQL и Adminer не проброшены на хост** (только внутри сети Docker). Чтобы открыть порты `5432` и `8080` для локальной отладки:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+**Опционально — защита веб-интерфейса:** если в `.env` задать **оба** параметра `WEB_BASIC_AUTH_USER` и `WEB_BASIC_AUTH_PASSWORD`, дашборд и CSV потребуют HTTP Basic Auth (эндпоинты `/health` и `/ready` остаются без пароля).
+
+Сервисы:
+
+| Сервис     | Назначение |
+|------------|------------|
+| `db`       | PostgreSQL |
+| `adminer`  | Веб-админка БД (порт 8080 только с `docker-compose.dev.yml`) |
+| `collector`| ETL, сбор прайсов |
+| `web`      | **Аналитика** → http://localhost:8000 |
+| `ai_worker`| Пересчёт аномалий, TF-IDF, прогнозов |
+| `bot`      | Telegram-бот |
+
+### 4. Проверка
+
+```bash
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/ready
+docker compose logs -f collector
+docker compose logs -f ai_worker
+```
+
+В браузере: **http://localhost:8000** — дашборд, товары, аномалии, сопоставления, выгрузки CSV.
+
+### 5. Тесты (локально)
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pytest tests/ -q
+```
+
+## Структура проекта
+
+```
+├── app/
+│   ├── database.py          # Модели БД (+ история, аномалии, матчи, прогноз)
+│   ├── collector.py         # ETL
+│   ├── price_history_util.py
+│   ├── bot.py               # Telegram
+│   ├── ai_worker.py         # ИИ-контур
+│   ├── ml/                  # Аномалии, TF-IDF
+│   └── web/                 # FastAPI + Jinja2 + шаблоны
+├── tests/                   # pytest
+├── alembic/                 # миграции схемы (патчи индексов / колонок)
+├── VKR_AND_PRACTICE_REPORT.md  # Текст глав 1–3 (ВКР и практика)
+├── README_REPORT.md         # Расширенная записка (курсовой наследие)
+├── docker-compose.yml
+└── docker-compose.dev.yml   # опционально: порты db + adminer на хост
+```
+
+## Источники данных
+
+ЦБ РФ, FakeStore, TBM Market, GalaCentre, EKF (YML), TDM Electric (XLS) — см. `app/collector.py`.
+
+## Документация
+
+- **[VKR_AND_PRACTICE_REPORT.md](VKR_AND_PRACTICE_REPORT.md)** — структура ВКР и отчёта по практике (главы 1–3).
+- **[README_REPORT.md](README_REPORT.md)** — пояснительная записка с диаграммами (актуализируйте под веб/ИИ при сдаче).
+
+## Остановка
+
+```bash
+docker compose down      # контейнеры, volume БД сохраняется
+docker compose down -v   # полная очистка данных
+```
+
+---
+
+**Направление:** 09.03.03 «Прикладная информатика»

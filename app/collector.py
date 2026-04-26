@@ -1,0 +1,975 @@
+"""
+ETL-процесс для сбора данных о ценах товаров из различных источников.
+
+Компоненты:
+- Сбор курсов валют от ЦБ РФ (XML API)
+- Сбор зарубежных товаров от FakeStore API (JSON)
+- Сбор российских товаров от TBM Market (YML Stream)
+- Сбор прайса TDM Electric (XLS)
+- Сбор каталога EKF (YML/XML)
+"""
+
+import logging
+import os
+import signal
+import time
+from datetime import datetime
+from io import BytesIO
+import re
+from typing import Optional
+
+import requests
+from lxml import etree
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.database import get_engine, init_db, get_session, ExchangeRate, Product
+from app.price_history_util import record_price_change
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Константы для источников данных
+CBR_API_URL = "http://www.cbr.ru/scripts/XML_daily.asp"
+FAKESTORE_API_URL = "https://fakestoreapi.com/products"
+TBM_MARKET_YML_URL = "https://www.tbmmarket.ru/tbmmarket/service/yandex-market.xml"
+GALACENTRE_YML_URL = "https://www.galacentre.ru/download/yml/yml.xml"
+TDM_PRICE_XLS_URL = "https://tdme.ru/download/priceTDM.xls"
+EKF_YML_URL = "https://export-xml.storage.yandexcloud.net/products.yml"
+
+# Настройки сбора данных
+# Сколько товаров грузить с каждого магазина (для очень больших фидов).
+# 0 = без лимита (может быть очень долго на больших YML)
+SHOP_ITEM_LIMIT = int(os.getenv("SHOP_ITEM_LIMIT", "20000"))
+
+# Эти ключевые слова дальше используются ботом в /compare (защита от "магнитов"),
+# но сборщик больше не фильтрует по ним (грузим весь каталог/лимит).
+INTERSECTION_KEYWORDS = ("микроволнов", "свч", "холодиль")
+
+UPDATE_INTERVAL = 3600  # Интервал обновления в секундах (1 час)
+
+# Остановка по SIGTERM/SIGINT (Docker stop отправляет SIGTERM).
+_shutdown_requested = False
+
+
+def _request_shutdown(*_: object) -> None:
+    """Помечает главный цикл для выхода после текущей итерации."""
+    global _shutdown_requested
+    _shutdown_requested = True
+
+_BARCODE_RE = re.compile(r"\d{8,14}")
+_VENDOR_CODE_RE = re.compile(r"[A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9\\-_/\\.]{2,63}")
+
+
+def _parse_price_ru(text: str) -> float:
+    """Парсит цену в формате RU: '101,41' или '101.41'."""
+    return float(text.strip().replace(" ", "").replace(",", "."))
+
+
+def _first_barcode(raw: Optional[str]) -> Optional[str]:
+    """Возвращает первый штрихкод из строки (в т.ч. 'a,b,c')."""
+    if not raw:
+        return None
+    found = _BARCODE_RE.findall(raw)
+    return found[0] if found else None
+
+
+def _normalize_vendor_code(raw: Optional[str]) -> Optional[str]:
+    """Нормализует артикул/код товара: trim, collapse spaces, upper."""
+    if not raw:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    value = re.sub(r"\\s+", " ", value)
+    value = value.replace(" ", "")
+    return value.upper() or None
+
+
+def _guess_vendor_code(raw: Optional[str]) -> Optional[str]:
+    """Пытается вытащить 'похожий на артикул' токен из строки."""
+    if not raw:
+        return None
+    m = _VENDOR_CODE_RE.search(raw)
+    return _normalize_vendor_code(m.group(0)) if m else None
+
+
+def _name_from_url_slug(url: Optional[str]) -> Optional[str]:
+    """Строит читаемое имя из slug в URL (если явного <name> нет)."""
+    if not url:
+        return None
+    try:
+        # Берем последний сегмент пути.
+        slug = url.split("?")[0].rstrip("/").split("/")[-1]
+        if not slug:
+            return None
+        # В EKF это обычно латиницей с дефисами.
+        name = slug.replace("-", " ").replace("_", " ").strip()
+        name = re.sub(r"\\s+", " ", name)
+        return name[:250] if name else None
+    except Exception:
+        return None
+
+
+def _extract_param(offer_elem: etree._Element, param_name: str) -> Optional[str]:
+    """Ищет <param name="...">value</param>."""
+    for p in offer_elem.findall("param"):
+        if p.get("name") == param_name and p.text:
+            value = p.text.strip()
+            return value or None
+    return None
+
+
+def _name_matches_intersection(name: str) -> bool:
+    """Проверяет, относится ли товар к сегменту пересечения (микроволновки/холодильники)."""
+    lowered = name.lower()
+    return any(k in lowered for k in INTERSECTION_KEYWORDS)
+
+
+def _normalize_name(text: str) -> str:
+    """Нормализация имени для поиска пересечений по названию (name_norm в БД)."""
+    cleaned = (
+        text.lower()
+        .replace("ё", "е")
+        .replace("/", " ")
+        .replace("\\\\", " ")
+        .replace(",", " ")
+        .replace(".", " ")
+        .replace("(", " ")
+        .replace(")", " ")
+        .replace("[", " ")
+        .replace("]", " ")
+        .replace("{", " ")
+        .replace("}", " ")
+        .replace(":", " ")
+        .replace(";", " ")
+        .replace("|", " ")
+        .replace("+", " ")
+        .replace("—", " ")
+        .replace("–", " ")
+        .replace("-", " ")
+        .replace("\"", " ")
+        .replace("'", " ")
+    )
+    cleaned = re.sub(r"\\s+", " ", cleaned).strip()
+    return cleaned[:600]
+
+
+def _fetch_yml_stream(url: str, *, timeout: tuple[int, int] = (10, 180)) -> requests.Response:
+    """Скачивает YML/XML как stream-ответ (единый helper для всех YML источников)."""
+    headers = {
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+    }
+    response = requests.get(url, headers=headers, stream=True, timeout=timeout)
+    response.raise_for_status()
+    response.raw.decode_content = True
+    return response
+
+
+def fetch_ekf_goods(session) -> None:
+    """
+    Получает товары из EKF (YML/XML), фид лежит в YandexCloud.
+
+    Загружает весь каталог (или ограничение SHOP_ITEM_LIMIT, если задано).
+    """
+    try:
+        logger.info("🏭 Начинаем сбор товаров EKF (YML Stream)...")
+
+        response = _fetch_yml_stream(EKF_YML_URL, timeout=(10, 180))
+        saved_count = 0
+
+        context = etree.iterparse(
+            response.raw,
+            events=("end",),
+            tag="offer",
+            recover=True,
+            huge_tree=True,
+        )
+
+        for _, offer_elem in context:
+            if SHOP_ITEM_LIMIT > 0 and saved_count >= SHOP_ITEM_LIMIT:
+                break
+
+            offer_id = offer_elem.get("id")
+            try:
+                if not offer_id:
+                    continue
+
+                price_text = offer_elem.findtext("price")
+                url = offer_elem.findtext("url")
+                category_id = offer_elem.findtext("categoryId")
+                currency = (offer_elem.findtext("currencyId") or "RUR").strip().upper()
+
+                if not price_text:
+                    continue
+
+                price_value = _parse_price_ru(price_text)
+
+                # EKF часто даёт vendorCode/param Артикул/похожие поля.
+                vendor_code = (
+                    offer_elem.findtext("vendorCode")
+                    or _extract_param(offer_elem, "Артикул")
+                    or _extract_param(offer_elem, "Код")
+                    or offer_elem.findtext("model")
+                )
+                vendor_code = _normalize_vendor_code(vendor_code)
+                barcode = _first_barcode(offer_elem.findtext("barcode"))
+
+                # В EKF фиде часто нет <name>/<model>/<typePrefix>. Тогда делаем "читаемое имя" из URL.
+                name = (offer_elem.findtext("name") or "").strip()
+                if not name:
+                    name = _name_from_url_slug(url) or vendor_code or f"EKF offer {offer_id}"
+
+                # В этом фиде валюты разные; считаем price_in_rub только если RUR/RUB.
+                if currency in ("RUR", "RUB"):
+                    price_in_rub = price_value
+                else:
+                    # Без курсов по всем валютам: сохраняем как есть, но помечаем.
+                    price_in_rub = price_value
+
+                external_id = f"ekf_{offer_id}"
+                stmt = insert(Product).values(
+                    external_id=external_id,
+                    name=name,
+                    name_norm=_normalize_name(name),
+                    price_original=price_value,
+                    currency=currency if len(currency) == 3 else "RUR",
+                    price_in_rub=price_in_rub,
+                    source_shop="EKF",
+                    url=url,
+                    barcode=barcode,
+                    vendor_code=vendor_code,
+                    category_id=category_id,
+                    updated_at=datetime.utcnow(),
+                ).on_conflict_do_update(
+                    index_elements=["external_id"],
+                    set_={
+                        "name": name,
+                        "name_norm": _normalize_name(name),
+                        "price_original": price_value,
+                        "currency": currency if len(currency) == 3 else "RUR",
+                        "price_in_rub": price_in_rub,
+                        "url": url,
+                        "barcode": barcode,
+                        "vendor_code": vendor_code,
+                        "category_id": category_id,
+                        "updated_at": datetime.utcnow(),
+                    },
+                )
+
+                session.execute(stmt)
+                record_price_change(session, external_id=external_id, source_shop="EKF")
+                saved_count += 1
+
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning(f"⚠️ Ошибка обработки товара EKF {offer_id}: {e}")
+            finally:
+                offer_elem.clear()
+                while offer_elem.getprevious() is not None:
+                    del offer_elem.getparent()[0]
+
+        del context
+        session.commit()
+        logger.info(f"✅ Успешно сохранено товаров от EKF: {saved_count}")
+
+    except requests.RequestException as e:
+        logger.error(f"❌ Ошибка при запросе к EKF: {e}")
+        session.rollback()
+    except etree.XMLSyntaxError as e:
+        logger.error(f"❌ Ошибка парсинга YML от EKF: {e}")
+        session.rollback()
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении товаров EKF: {e}")
+        session.rollback()
+
+
+def fetch_tdm_goods_from_xls(session) -> None:
+    """
+    Получает товары TDM Electric из XLS прайс-листа.
+
+    Важно: формат XLS зависит от поставщика; мы читаем шапку, ищем разумные колонки:
+    - наименование
+    - цена
+    - артикул/код/sku
+    - штрихкод (если есть)
+    """
+    try:
+        import xlrd  # type: ignore
+    except ModuleNotFoundError:
+        logger.error("❌ Не установлен xlrd. Добавьте xlrd в requirements и пересоберите контейнер.")
+        return
+
+    try:
+        logger.info("🏭 Начинаем сбор прайс-листа TDM (XLS)...")
+        response = requests.get(TDM_PRICE_XLS_URL, timeout=60)
+        response.raise_for_status()
+
+        book = xlrd.open_workbook(file_contents=response.content)
+        sheet = book.sheet_by_index(0)
+
+        # Ищем строку заголовков в первых 50 строках.
+        header_row_idx: Optional[int] = None
+        header_map: dict[str, int] = {}
+        for r in range(min(50, sheet.nrows)):
+            row = [str(sheet.cell_value(r, c)).strip() for c in range(sheet.ncols)]
+            joined = " ".join(x.lower() for x in row if x)
+            if any(k in joined for k in ("артик", "наимен", "цена", "штрих", "barcode", "ean", "код")):
+                for c, v in enumerate(row):
+                    key = v.strip().lower()
+                    if key:
+                        header_map[key] = c
+                header_row_idx = r
+                break
+
+        if header_row_idx is None:
+            logger.error("❌ Не удалось найти строку заголовков в XLS TDM (первые 50 строк).")
+            return
+
+        def _find_col(*needles: str) -> Optional[int]:
+            for k, idx in header_map.items():
+                for n in needles:
+                    if n in k:
+                        return idx
+            return None
+
+        col_name = _find_col("наимен", "товар", "номенклат", "product", "name")
+        col_price = _find_col("цена", "price")
+        col_vendor = _find_col("артик", "код", "sku", "vendor", "арт.")
+        col_barcode = _find_col("штрих", "barcode", "ean", "gtin")
+
+        if col_name is None or col_price is None:
+            logger.error(
+                "❌ В XLS TDM не найдены обязательные колонки name/price. "
+                f"name={col_name}, price={col_price}, vendor={col_vendor}, barcode={col_barcode}"
+            )
+            return
+
+        # If barcode column was not detected by header, try to guess it by scanning values.
+        if col_barcode is None:
+            sample_rows = min(3000, max(0, sheet.nrows - (header_row_idx + 1)))
+            best_col = None
+            best_hits = 0
+            # scan all columns and count barcode-like hits
+            for c in range(sheet.ncols):
+                if c in (col_name, col_price):
+                    continue
+                hits = 0
+                checked = 0
+                for r in range(header_row_idx + 1, min(sheet.nrows, header_row_idx + 1 + sample_rows)):
+                    v = sheet.cell_value(r, c)
+                    if v in (None, ""):
+                        continue
+                    checked += 1
+                    s = str(v).strip()
+                    if _first_barcode(s):
+                        hits += 1
+                if hits > best_hits:
+                    best_hits = hits
+                    best_col = c
+            # accept if enough hits (avoid random numeric columns)
+            if best_col is not None and best_hits >= 50:
+                col_barcode = best_col
+                logger.info(f"🔎 TDM: обнаружена колонка со штрихкодами по данным: col={col_barcode}, hits={best_hits}")
+
+        saved = 0
+        for r in range(header_row_idx + 1, sheet.nrows):
+            try:
+                name = str(sheet.cell_value(r, col_name)).strip()
+                if not name or name.lower() in ("nan", "none"):
+                    continue
+
+                raw_price = sheet.cell_value(r, col_price)
+                if raw_price in (None, ""):
+                    continue
+
+                # xlrd может дать float или строку
+                if isinstance(raw_price, (int, float)):
+                    price_rub = float(raw_price)
+                else:
+                    price_rub = _parse_price_ru(str(raw_price))
+
+                vendor_code = None
+                if col_vendor is not None:
+                    vendor_code = _normalize_vendor_code(str(sheet.cell_value(r, col_vendor)))
+                if not vendor_code:
+                    vendor_code = _guess_vendor_code(name)
+
+                barcode = None
+                if col_barcode is not None:
+                    barcode = _first_barcode(str(sheet.cell_value(r, col_barcode)))
+
+                # Внешний id — по строке и vendor_code если есть.
+                external_id = f"tdm_{vendor_code or r}"
+                stmt = insert(Product).values(
+                    external_id=external_id,
+                    name=name,
+                    name_norm=_normalize_name(name),
+                    price_original=price_rub,
+                    currency="RUB",
+                    price_in_rub=price_rub,
+                    source_shop="TDM Electric",
+                    url=None,
+                    barcode=barcode,
+                    vendor_code=vendor_code,
+                    category_id=None,
+                    updated_at=datetime.utcnow(),
+                ).on_conflict_do_update(
+                    index_elements=["external_id"],
+                    set_={
+                        "name": name,
+                        "name_norm": _normalize_name(name),
+                        "price_original": price_rub,
+                        "price_in_rub": price_rub,
+                        "barcode": barcode,
+                        "vendor_code": vendor_code,
+                        "updated_at": datetime.utcnow(),
+                    },
+                )
+                session.execute(stmt)
+                record_price_change(session, external_id=external_id, source_shop="TDM Electric")
+                saved += 1
+
+            except (ValueError, TypeError) as e:
+                logger.warning(f"⚠️ Ошибка обработки строки XLS TDM #{r}: {e}")
+
+        session.commit()
+        logger.info(f"✅ Успешно сохранено {saved} товаров от TDM Electric (XLS)")
+
+    except requests.RequestException as e:
+        logger.error(f"❌ Ошибка при запросе к TDM XLS: {e}")
+        session.rollback()
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при разборе XLS TDM: {e}")
+        session.rollback()
+
+
+def fetch_currency(session) -> None:
+    """
+    Получает курсы валют от ЦБ РФ и сохраняет их в базу данных.
+    
+    API ЦБ РФ возвращает XML в кодировке windows-1251 с курсами всех валют.
+    Функция извлекает курс USD и обновляет запись в таблице exchange_rates.
+    
+    Args:
+        session: Сессия SQLAlchemy для работы с БД.
+        
+    Raises:
+        requests.RequestException: При ошибке HTTP-запроса.
+        etree.XMLSyntaxError: При ошибке парсинга XML.
+    """
+    try:
+        logger.info("🌐 Начинаем сбор курсов валют от ЦБ РФ...")
+        
+        # HTTP запрос к API ЦБ РФ
+        response = requests.get(CBR_API_URL, timeout=10)
+        response.raise_for_status()
+        
+        # Парсинг XML с корректной кодировкой
+        content = response.content
+        parser = etree.XMLParser(encoding='windows-1251')
+        tree = etree.parse(BytesIO(content), parser)
+        root = tree.getroot()
+        
+        # Поиск элемента с валютой USD (CharCode = "USD")
+        usd_valute = root.xpath("//Valute[CharCode='USD']")
+        
+        if not usd_valute:
+            logger.error("❌ Не найден курс USD в ответе ЦБ РФ")
+            return
+        
+        # Извлечение курса (Value содержит строку с запятой как разделитель)
+        usd_element = usd_valute[0]
+        value_text = usd_element.find('Value').text
+        nominal_text = usd_element.find('Nominal').text
+        
+        # Конвертация: замена запятой на точку для float
+        usd_rate = float(value_text.replace(',', '.'))
+        nominal = int(nominal_text)
+        
+        # Нормализация курса (обычно nominal = 1, но бывает иначе)
+        normalized_rate = usd_rate / nominal
+        
+        logger.info(f"💵 Получен курс USD: {normalized_rate:.4f} RUB")
+        
+        # UPSERT: обновление существующей записи или вставка новой
+        stmt = insert(ExchangeRate).values(
+            currency_code='USD',
+            rate=normalized_rate,
+            updated_at=datetime.utcnow()
+        ).on_conflict_do_update(
+            index_elements=['currency_code'],
+            set_={
+                'rate': normalized_rate,
+                'updated_at': datetime.utcnow()
+            }
+        )
+        
+        session.execute(stmt)
+        session.commit()
+        
+        logger.info("✅ Курс USD успешно сохранен в БД")
+        
+    except requests.RequestException as e:
+        logger.error(f"❌ Ошибка при запросе к ЦБ РФ: {e}")
+        session.rollback()
+    except etree.XMLSyntaxError as e:
+        logger.error(f"❌ Ошибка парсинга XML от ЦБ РФ: {e}")
+        session.rollback()
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении курсов валют: {e}")
+        session.rollback()
+
+
+def fetch_foreign_goods(session) -> None:
+    """
+    Получает информацию о зарубежных товарах от FakeStore API.
+    
+    FakeStore API возвращает JSON с массивом товаров в долларах США.
+    Функция конвертирует цены в рубли используя курс из БД.
+    
+    Args:
+        session: Сессия SQLAlchemy для работы с БД.
+        
+    Raises:
+        requests.RequestException: При ошибке HTTP-запроса.
+    """
+    try:
+        logger.info("🛒 Начинаем сбор зарубежных товаров от FakeStore API...")
+        
+        # Получаем актуальный курс USD из БД
+        stmt = select(ExchangeRate).where(ExchangeRate.currency_code == 'USD')
+        result = session.execute(stmt)
+        usd_rate_obj = result.scalar_one_or_none()
+        
+        if not usd_rate_obj:
+            logger.error("❌ Курс USD не найден в БД. Сначала запустите fetch_currency()")
+            return
+        
+        usd_rate = usd_rate_obj.rate
+        logger.info(f"💱 Используем курс USD: {usd_rate:.4f} RUB")
+        
+        # HTTP запрос к FakeStore API
+        response = requests.get(FAKESTORE_API_URL, timeout=15)
+        response.raise_for_status()
+        
+        products_data = response.json()
+        logger.info(f"📦 Получено {len(products_data)} товаров от FakeStore")
+        
+        # Обработка каждого товара
+        saved_count = 0
+        for product_json in products_data:
+            try:
+                product_id = product_json.get('id')
+                title = product_json.get('title', 'Unknown Product')
+                price_usd = float(product_json.get('price', 0))
+                
+                # Конвертация цены в рубли
+                price_rub = price_usd * usd_rate
+                
+                # Формирование уникального external_id
+                external_id = f"fakestore_{product_id}"
+                
+                # UPSERT товара
+                stmt = insert(Product).values(
+                    external_id=external_id,
+                    name=title,
+                    name_norm=_normalize_name(title),
+                    price_original=price_usd,
+                    currency='USD',
+                    price_in_rub=price_rub,
+                    source_shop='FakeStore',
+                    url=f"https://fakestoreapi.com/products/{product_id}",
+                    updated_at=datetime.utcnow()
+                ).on_conflict_do_update(
+                    index_elements=['external_id'],
+                    set_={
+                        'name': title,
+                        'name_norm': _normalize_name(title),
+                        'price_original': price_usd,
+                        'price_in_rub': price_rub,
+                        'updated_at': datetime.utcnow()
+                    }
+                )
+                
+                session.execute(stmt)
+                record_price_change(session, external_id=external_id, source_shop="FakeStore")
+                saved_count += 1
+                
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"⚠️ Ошибка обработки товара {product_json}: {e}")
+                continue
+        
+        session.commit()
+        logger.info(f"✅ Успешно сохранено {saved_count} товаров от FakeStore")
+        
+    except requests.RequestException as e:
+        logger.error(f"❌ Ошибка при запросе к FakeStore API: {e}")
+        session.rollback()
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении зарубежных товаров: {e}")
+        session.rollback()
+
+
+def fetch_russian_goods(session) -> None:
+    """
+    Получает информацию о российских товарах от TBM Market (YML формат).
+    
+    Использует потоковый парсинг (streaming) для обработки больших XML-файлов
+    без полной загрузки в память. Обрабатывает первые N товаров из фида.
+    
+    Args:
+        session: Сессия SQLAlchemy для работы с БД.
+        
+    Raises:
+        requests.RequestException: При ошибке HTTP-запроса.
+        etree.XMLSyntaxError: При ошибке парсинга YML.
+    """
+    try:
+        logger.info("🏪 Начинаем сбор российских товаров от TBM Market (YML Stream)...")
+        
+        # HTTP запрос с потоковой передачей данных
+        response = requests.get(TBM_MARKET_YML_URL, stream=True, timeout=(10, 60))
+        response.raise_for_status()
+        response.raw.decode_content = True
+        
+        logger.info("📡 Начинаем потоковый парсинг YML...")
+        
+        # Потоковый парсинг XML через iterparse (memory-efficient)
+        saved_count = 0
+        context = etree.iterparse(
+            response.raw,
+            events=('end',),
+            tag='offer'
+        )
+        
+        for event, offer_elem in context:
+            if SHOP_ITEM_LIMIT > 0 and saved_count >= SHOP_ITEM_LIMIT:
+                break
+            
+            try:
+                # Извлечение атрибутов и элементов товара
+                offer_id = offer_elem.get('id')
+                
+                if not offer_id:
+                    continue
+                
+                # Извлечение данных из дочерних элементов
+                name_elem = offer_elem.find('name')
+                price_elem = offer_elem.find('price')
+                url_elem = offer_elem.find('url')
+                
+                if name_elem is None or price_elem is None:
+                    continue
+                
+                name = (name_elem.text or "").strip()
+                price_rub = _parse_price_ru(price_elem.text)
+                url = url_elem.text if url_elem is not None else None
+                category_id = offer_elem.findtext("categoryId")
+                barcode = _first_barcode(offer_elem.findtext("barcode"))
+                vendor_code = offer_elem.findtext("vendorCode") or _extract_param(offer_elem, "Артикул")
+                
+                # Формирование уникального external_id
+                external_id = f"tbm_{offer_id}"
+                
+                # UPSERT товара (российские цены уже в рублях)
+                stmt = insert(Product).values(
+                    external_id=external_id,
+                    name=name,
+                    name_norm=_normalize_name(name),
+                    price_original=price_rub,
+                    currency='RUB',
+                    price_in_rub=price_rub,
+                    source_shop='TBM Market',
+                    url=url,
+                    barcode=barcode,
+                    vendor_code=vendor_code,
+                    category_id=category_id,
+                    updated_at=datetime.utcnow()
+                ).on_conflict_do_update(
+                    index_elements=['external_id'],
+                    set_={
+                        'name': name,
+                        'name_norm': _normalize_name(name),
+                        'price_original': price_rub,
+                        'price_in_rub': price_rub,
+                        'barcode': barcode,
+                        'vendor_code': vendor_code,
+                        'category_id': category_id,
+                        'updated_at': datetime.utcnow()
+                    }
+                )
+                
+                session.execute(stmt)
+                record_price_change(session, external_id=external_id, source_shop="TBM Market")
+                saved_count += 1
+                
+                # Очистка элемента из памяти (важно для streaming)
+                offer_elem.clear()
+                while offer_elem.getprevious() is not None:
+                    del offer_elem.getparent()[0]
+                
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.warning(f"⚠️ Ошибка обработки товара {offer_id}: {e}")
+                continue
+        
+        # Очистка контекста парсера
+        del context
+        
+        session.commit()
+        logger.info(f"✅ Успешно сохранено товаров от TBM Market: {saved_count}")
+        
+    except requests.RequestException as e:
+        logger.error(f"❌ Ошибка при запросе к TBM Market: {e}")
+        session.rollback()
+    except etree.XMLSyntaxError as e:
+        logger.error(f"❌ Ошибка парсинга YML от TBM Market: {e}")
+        session.rollback()
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении российских товаров: {e}")
+        session.rollback()
+
+
+def fetch_galacentre_goods(session) -> None:
+    """
+    Получает товары из Гала-Центра (YML), без API-ключа.
+
+    Загружает весь каталог (или ограничение SHOP_ITEM_LIMIT, если задано).
+    """
+    try:
+        logger.info("🏪 Начинаем сбор российских товаров от GalaCentre (YML Stream)...")
+
+        headers = {
+            # Reduce chance of broken chunked responses and huge gzip buffers.
+            "Accept-Encoding": "identity",
+            "Connection": "close",
+        }
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            saved_count = 0
+            pending_writes = 0
+
+            try:
+                response = requests.get(
+                    GALACENTRE_YML_URL,
+                    headers=headers,
+                    stream=True,
+                    timeout=(10, 180),
+                )
+                response.raise_for_status()
+                response.raw.decode_content = True
+
+                context = etree.iterparse(
+                    response.raw,
+                    events=("end",),
+                    tag="offer",
+                    recover=True,
+                    huge_tree=True,
+                )
+
+                for _, offer_elem in context:
+                    if SHOP_ITEM_LIMIT > 0 and saved_count >= SHOP_ITEM_LIMIT:
+                        break
+
+                    offer_id = offer_elem.get("id")
+                    try:
+                        if not offer_id:
+                            continue
+
+                        name = (offer_elem.findtext("name") or "").strip()
+                        price_text = offer_elem.findtext("price")
+                        url = offer_elem.findtext("url")
+                        category_id = offer_elem.findtext("categoryId")
+
+                        if not name or not price_text:
+                            continue
+
+                        price_rub = _parse_price_ru(price_text)
+                        barcode = _first_barcode(offer_elem.findtext("barcode"))
+
+                        # В YML Гала-Центра артикул часто лежит в param name="Артикул"
+                        vendor_code = _extract_param(offer_elem, "Артикул") or offer_elem.findtext("model")
+
+                        external_id = f"galacentre_{offer_id}"
+
+                        stmt = insert(Product).values(
+                            external_id=external_id,
+                            name=name,
+                            name_norm=_normalize_name(name),
+                            price_original=price_rub,
+                            currency="RUB",
+                            price_in_rub=price_rub,
+                            source_shop="GalaCentre",
+                            url=url,
+                            barcode=barcode,
+                            vendor_code=vendor_code,
+                            category_id=category_id,
+                            updated_at=datetime.utcnow(),
+                        ).on_conflict_do_update(
+                            index_elements=["external_id"],
+                            set_={
+                                "name": name,
+                                "name_norm": _normalize_name(name),
+                                "price_original": price_rub,
+                                "price_in_rub": price_rub,
+                                "barcode": barcode,
+                                "vendor_code": vendor_code,
+                                "category_id": category_id,
+                                "updated_at": datetime.utcnow(),
+                            },
+                        )
+
+                        session.execute(stmt)
+                        record_price_change(session, external_id=external_id, source_shop="GalaCentre")
+                        pending_writes += 1
+                        saved_count += 1
+
+                        # Commit in small batches so partial results survive transient network failures.
+                        if pending_writes >= 25:
+                            session.commit()
+                            pending_writes = 0
+
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logger.warning(f"⚠️ Ошибка обработки товара GalaCentre {offer_id}: {e}")
+                    finally:
+                        offer_elem.clear()
+                        while offer_elem.getprevious() is not None:
+                            del offer_elem.getparent()[0]
+
+                del context
+                if pending_writes:
+                    session.commit()
+
+                logger.info(
+                    f"✅ Успешно сохранено товаров от GalaCentre: {saved_count}"
+                )
+                break
+
+            except (requests.RequestException, etree.XMLSyntaxError) as e:
+                # Keep whatever was committed, but do not keep an open transaction.
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+
+                if attempt < max_attempts:
+                    logger.warning(
+                        f"⚠️ Ошибка загрузки/парсинга GalaCentre (попытка {attempt}/{max_attempts}): {e}. Повтор..."
+                    )
+                    continue
+
+                logger.error(f"❌ Не удалось загрузить GalaCentre после {max_attempts} попыток: {e}")
+                break
+
+    except requests.RequestException as e:
+        logger.error(f"❌ Ошибка при запросе к GalaCentre: {e}")
+        session.rollback()
+    except etree.XMLSyntaxError as e:
+        logger.error(f"❌ Ошибка парсинга YML от GalaCentre: {e}")
+        session.rollback()
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при получении товаров GalaCentre: {e}")
+        session.rollback()
+
+
+def collect_all_data(session) -> None:
+    """
+    Выполняет полный цикл сбора данных из всех источников.
+    
+    Последовательность:
+    1. Получение курсов валют (необходимо для конвертации)
+    2. Получение зарубежных товаров
+    3. Получение российских товаров
+    
+    Args:
+        session: Сессия SQLAlchemy для работы с БД.
+    """
+    logger.info("=" * 60)
+    logger.info("🚀 Запуск цикла сбора данных")
+    logger.info("=" * 60)
+    
+    # Шаг 1: Курсы валют (критически важно для следующих шагов)
+    fetch_currency(session)
+    
+    # Шаг 2: Зарубежные товары (оставляем для понта/задела)
+    fetch_foreign_goods(session)
+
+    # Шаг 3: Российские товары (TBM)
+    fetch_russian_goods(session)
+
+    # Шаг 4: Российские товары (GalaCentre)
+    fetch_galacentre_goods(session)
+
+    # Шаг 5: Товары EKF (YML)
+    fetch_ekf_goods(session)
+
+    # Шаг 6: TDM Electric (XLS)
+    fetch_tdm_goods_from_xls(session)
+    
+    logger.info("=" * 60)
+    logger.info("✅ Цикл сбора данных завершен")
+    logger.info("=" * 60)
+
+
+def main() -> None:
+    """
+    Главная функция процесса-сборщика данных.
+    
+    Инициализирует БД и запускает бесконечный цикл сбора данных
+    с периодическими обновлениями согласно UPDATE_INTERVAL.
+    """
+    logger.info("🎯 Инициализация сборщика данных...")
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
+
+    try:
+        # Создание подключения к БД
+        engine = get_engine()
+        logger.info("✅ Подключение к БД установлено")
+        
+        # Инициализация структуры БД
+        init_db(engine)
+        
+        # Бесконечный цикл сбора данных
+        while not _shutdown_requested:
+            try:
+                # Создаем новую сессию для каждого цикла
+                session = get_session(engine)
+                
+                try:
+                    collect_all_data(session)
+                finally:
+                    session.close()
+                
+                if _shutdown_requested:
+                    logger.info("⏹️ Завершение по сигналу после цикла сбора.")
+                    break
+
+                # Ожидание перед следующим циклом
+                logger.info(f"⏰ Следующий сбор данных через {UPDATE_INTERVAL} секунд...")
+                time.sleep(UPDATE_INTERVAL)
+                
+            except SQLAlchemyError as e:
+                logger.error(f"❌ Ошибка БД в цикле сбора: {e}")
+                time.sleep(60)  # Короткая пауза перед повтором при ошибке БД
+            except KeyboardInterrupt:
+                logger.info("⏹️ Получен сигнал остановки. Завершение работы...")
+                break
+            except Exception as e:
+                logger.error(f"❌ Неожиданная ошибка в главном цикле: {e}")
+                time.sleep(60)  # Короткая пауза перед повтором
+    
+    except Exception as e:
+        logger.critical(f"💀 Критическая ошибка при инициализации: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
+

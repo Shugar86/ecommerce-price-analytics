@@ -1,0 +1,21 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+
+actor "Пользователь\n(клиент Telegram)" as User
+
+rectangle "Система мониторинга цен (Бот)" {
+  usecase "Найти товар по названию" as UC1
+  usecase "Сравнить цены магазинов" as UC2
+  usecase "Просмотреть список источников" as UC3
+  usecase "Получить статистику БД" as UC4
+}
+
+User --> UC1
+User --> UC2
+User --> UC3
+User --> UC4
+
+@enduml
+
+

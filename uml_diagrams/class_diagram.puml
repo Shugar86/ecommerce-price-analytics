@@ -1,0 +1,55 @@
+@startuml
+skinparam classAttributeIconSize 0
+
+interface Base {
+  +metadata: MetaData
+}
+
+class Product {
+  +id: Integer
+  +external_id: String
+  +name: String
+  +price_in_rub: Float
+  +source_shop: String
+  +updated_at: DateTime
+}
+
+class ExchangeRate {
+  +id: Integer
+  +currency_code: String
+  +rate: Float
+  +updated_at: DateTime
+}
+
+class DatabaseManager {
+  +get_session(): Session
+  +init_db(): void
+}
+
+class Collector {
+  +run_cycle(): void
+  -fetch_prices(): void
+}
+
+class Bot {
+  +start(): void
+  +find_products(): void
+  +compare_prices(): void
+}
+
+' Наследование
+Base <|-- Product
+Base <|-- ExchangeRate
+
+' Композиция (Бот и Коллектор владеют менеджером БД)
+Bot *-- DatabaseManager
+Collector *-- DatabaseManager
+
+' Зависимости (использование сущностей)
+Collector ..> Product : <<create/update>>
+Collector ..> ExchangeRate : <<read/update>>
+Bot ..> Product : <<read>>
+
+@enduml
+
+

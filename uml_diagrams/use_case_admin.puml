@@ -1,0 +1,18 @@
+@startuml
+left to right direction
+actor "Администратор\n(сопровождение)" as Admin
+
+rectangle "Backend-управление" {
+  usecase "Запустить цикл сбора данных" as UC1
+  usecase "Просмотреть логи ошибок" as UC2
+  usecase "Проверить статус контейнеров" as UC3
+  usecase "Очистить базу данных" as UC4
+}
+
+Admin --> UC1
+Admin --> UC2
+Admin --> UC3
+Admin --> UC4
+@enduml
+
+

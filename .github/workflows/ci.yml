@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install and test
+        run: |
+          set -e
+          if [ -f requirements.txt ]; then
+            REPO_ROOT="."
+          elif [ -f projects/Repo/requirements.txt ]; then
+            REPO_ROOT="projects/Repo"
+          else
+            echo "requirements.txt not found"
+            exit 1
+          fi
+          pip install -r "$REPO_ROOT/requirements.txt"
+          (cd "$REPO_ROOT" && pytest tests/ -q)
+          pip install pip-audit
+          (cd "$REPO_ROOT" && pip-audit -r requirements.txt --desc on || true)

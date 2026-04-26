@@ -1,0 +1,116 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: prices_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-courseuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coursepass}
+      POSTGRES_DB: ${POSTGRES_DB:-prices_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-courseuser} -d ${POSTGRES_DB:-prices_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - prices_network
+
+  adminer:
+    image: adminer:latest
+    container_name: prices_adminer
+    depends_on:
+      - db
+    networks:
+      - prices_network
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: prices_collector
+    command: python -m app.collector
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-courseuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coursepass}
+      POSTGRES_DB: ${POSTGRES_DB:-prices_db}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - prices_network
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: prices_bot
+    command: python -m app.bot
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-courseuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coursepass}
+      POSTGRES_DB: ${POSTGRES_DB:-prices_db}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      BOT_TOKEN: ${BOT_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - prices_network
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: prices_web
+    command: uvicorn app.web.main:app --host 0.0.0.0 --port 8000
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-courseuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coursepass}
+      POSTGRES_DB: ${POSTGRES_DB:-prices_db}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      WEB_BASIC_AUTH_USER: ${WEB_BASIC_AUTH_USER:-}
+      WEB_BASIC_AUTH_PASSWORD: ${WEB_BASIC_AUTH_PASSWORD:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - prices_network
+
+  ai_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: prices_ai_worker
+    command: python -m app.ai_worker
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-courseuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coursepass}
+      POSTGRES_DB: ${POSTGRES_DB:-prices_db}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      AI_WORKER_INTERVAL_SEC: ${AI_WORKER_INTERVAL_SEC:-300}
+      SEED_DEMO_HISTORY: ${SEED_DEMO_HISTORY:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - prices_network
+
+volumes:
+  postgres_data:
+
+networks:
+  prices_network:
+    driver: bridge
+

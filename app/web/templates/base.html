@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Аналитика цен{% endblock %}</title>
+    <style>
+        :root {
+            --bg: #0f1419;
+            --card: #1a2332;
+            --text: #e7ecf3;
+            --muted: #8b9cb3;
+            --accent: #3d8bfd;
+            --border: #2d3a4d;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: "Segoe UI", system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            line-height: 1.5;
+        }
+        header {
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 1.5rem;
+        }
+        header h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+        nav {
+            margin-top: 0.75rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        nav a {
+            color: var(--accent);
+            text-decoration: none;
+            padding: 0.35rem 0.75rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        nav a:hover { background: #243044; }
+        main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+        }
+        .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+        .stat { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+        .muted { color: var(--muted); font-size: 0.9rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
+        th { color: var(--muted); font-weight: 500; }
+        input, select, button {
+            background: #243044;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.45rem 0.65rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        button { cursor: pointer; background: var(--accent); border-color: var(--accent); color: #fff; }
+        a.row-link { color: var(--accent); }
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            background: #243044;
+            border: 1px solid var(--border);
+        }
+    </style>
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+<header>
+    <h1>Микросервисная аналитика цен (e-commerce)</h1>
+    <nav>
+        <a href="/">Дашборд</a>
+        <a href="/products">Товары</a>
+        <a href="/anomalies">Аномалии</a>
+        <a href="/matches">Сопоставления</a>
+        <a href="/docs">API (Swagger)</a>
+    </nav>
+</header>
+<main>
+    {% block content %}{% endblock %}
+</main>
+</body>
+</html>

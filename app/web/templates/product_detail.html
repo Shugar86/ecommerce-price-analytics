@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name[:60] }}{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="card">
+    <h2 style="margin-top:0;font-size:1.1rem;">{{ product.name }}</h2>
+    <p class="muted">
+        <span class="badge">{{ product.source_shop }}</span>
+        ID {{ product.id }} · external_id {{ product.external_id }}
+    </p>
+    <p><strong>Цена:</strong> {{ "%.2f"|format(product.price_in_rub) }} ₽
+        {% if product.currency != 'RUB' %}({{ "%.2f"|format(product.price_original) }} {{ product.currency }}){% endif %}
+    </p>
+    {% if product.url %}
+    <p><a class="row-link" href="{{ product.url }}" target="_blank" rel="noopener">Ссылка на товар</a></p>
+    {% endif %}
+</div>
+
+{% if chart_values_json != "[]" %}
+<div class="card">
+    <h3 style="margin-top:0;font-size:1rem;">Динамика цены (история)</h3>
+    <canvas id="priceChart" height="100"></canvas>
+</div>
+<script>
+    const labels = {{ chart_labels_json|safe }};
+    const values = {{ chart_values_json|safe }};
+    const ctx = document.getElementById('priceChart');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Цена, ₽',
+                data: values,
+                borderColor: '#3d8bfd',
+                backgroundColor: 'rgba(61,139,253,0.15)',
+                fill: true,
+                tension: 0.2,
+            }]
+        },
+        options: {
+            plugins: { legend: { labels: { color: '#e7ecf3' } } },
+            scales: {
+                x: { ticks: { color: '#8b9cb3', maxRotation: 45 } },
+                y: { ticks: { color: '#8b9cb3' } },
+            }
+        }
+    });
+</script>
+{% else %}
+<div class="card muted">История цен пока пуста. После нескольких циклов collector появятся точки; при SEED_DEMO_HISTORY=1 ИИ-воркер добавит демо-ряд.</div>
+{% endif %}
+
+{% if forecast %}
+<div class="card">
+    <h3 style="margin-top:0;font-size:1rem;">Прогноз (linear_trend)</h3>
+    <p>Ожидаемая цена: <strong>{{ "%.2f"|format(forecast.forecast_price_rub) }} ₽</strong>
+        к {{ forecast.forecast_for }} UTC</p>
+</div>
+{% endif %}
+
+{% if anomalies %}
+<div class="card">
+    <h3 style="margin-top:0;font-size:1rem;">Аномалии по этому товару</h3>
+    <table>
+        <thead><tr><th>Тип</th><th>Серьёзность</th><th>Детали</th></tr></thead>
+        <tbody>
+        {% for a in anomalies %}
+        <tr>
+            <td>{{ a.anomaly_type }}</td>
+            <td>{{ "%.3f"|format(a.severity) }}</td>
+            <td>{{ a.detail or "—" }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if matches %}
+<div class="card">
+    <h3 style="margin-top:0;font-size:1rem;">Похожие товары (TF-IDF)</h3>
+    <table>
+        <thead><tr><th>Score</th><th>Товар</th></tr></thead>
+        <tbody>
+        {% for m in matches %}
+            {% set oid = m.product_high_id if m.product_low_id == product.id else m.product_low_id %}
+            {% set op = match_products.get(oid) %}
+            <tr>
+                <td>{{ "%.3f"|format(m.score) }}</td>
+                <td>
+                    {% if op %}
+                    <a class="row-link" href="/products/{{ op.id }}">{{ op.name[:100] }}</a>
+                    <span class="badge">{{ op.source_shop }}</span>
+                    {% else %}#{{ oid }}{% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<p><a class="row-link" href="/products">← К списку</a></p>
+{% endblock %}

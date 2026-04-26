@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Аномалии цен{% endblock %}
+{% block content %}
+<div class="card">
+    <p class="muted" style="margin-top:0;">Результаты пересчёта ИИ-воркера. Обновляются по расписанию контейнера <code>ai_worker</code>.</p>
+    <a class="row-link" href="/export/anomalies.csv">Скачать CSV</a>
+</div>
+
+<div class="card">
+    {% if rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Время</th>
+                <th>Тип</th>
+                <th>Серьёзность</th>
+                <th>Цена</th>
+                <th>Товар</th>
+                <th>Детали</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for a, p in rows %}
+        <tr>
+            <td>{{ a.detected_at }}</td>
+            <td><span class="badge">{{ a.anomaly_type }}</span></td>
+            <td>{{ "%.3f"|format(a.severity) }}</td>
+            <td>{{ "%.2f"|format(a.price_at_detection) }}</td>
+            <td><a class="row-link" href="/products/{{ p.id }}">{{ p.name[:100] }}{% if p.name|length > 100 %}…{% endif %}</a></td>
+            <td>{{ (a.detail or "")[:120] }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Аномалий пока нет. Нужна история цен (несколько точек) и запущенный ИИ-воркер.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+# Database
+sqlalchemy>=2.0.23
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+
+# HTTP клиент
+requests>=2.31.0
+
+# Парсинг XML/YML
+lxml>=5.1.0
+
+# Excel (XLS) parsing
+xlrd>=2.0.1
+
+# Telegram Bot
+aiogram>=3.4.1
+
+# Конфигурация
+python-dotenv>=1.0.0
+
+# Веб-приложение аналитика
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.3
+python-multipart>=0.0.6
+
+# ИИ / аналитика
+numpy>=1.26.0
+scikit-learn>=1.4.0
+
+# Тесты
+pytest>=8.0.0
+httpx>=0.26.0
+

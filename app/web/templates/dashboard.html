@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Дашборд — аналитика цен{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="grid">
+    <div class="card">
+        <div class="muted">Всего товаров в БД</div>
+        <div class="stat">{{ total_products }}</div>
+    </div>
+    <div class="card">
+        <div class="muted">Аномалий (ИИ)</div>
+        <div class="stat">{{ anomalies_n }}</div>
+    </div>
+    <div class="card">
+        <div class="muted">Сопоставлений TF-IDF</div>
+        <div class="stat">{{ matches_n }}</div>
+    </div>
+    <div class="card">
+        <div class="muted">Цена (руб.) min / max / средн.</div>
+        <div class="stat" style="font-size:1.1rem">{{ "%.0f"|format(price_min) }} — {{ "%.0f"|format(price_max) }}</div>
+        <div class="muted">средн. {{ "%.2f"|format(price_avg) }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2 style="margin-top:0;font-size:1rem;">Источники</h2>
+    {% if shops %}
+    <table>
+        <thead><tr><th>Магазин</th><th>Товаров</th></tr></thead>
+        <tbody>
+        {% for name, cnt in shops %}
+            <tr><td>{{ name }}</td><td>{{ cnt }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Нет данных — дождитесь загрузки collector.</p>
+    {% endif %}
+    {% if last_update %}
+    <p class="muted" style="margin-bottom:0;">Последнее обновление товаров: {{ last_update }} UTC</p>
+    {% endif %}
+</div>
+
+<div class="grid" style="grid-template-columns: 1fr 1fr; gap: 1rem;">
+    <div class="card">
+        <h2 style="margin-top:0;font-size:1rem;">Товары по источникам</h2>
+        <canvas id="shopsChart" height="160"></canvas>
+    </div>
+    <div class="card">
+        <h2 style="margin-top:0;font-size:1rem;">Средняя цена по дням (последние точки истории)</h2>
+        <canvas id="trendChart" height="160"></canvas>
+    </div>
+</div>
+
+<div class="card">
+    <p class="muted" style="margin:0;">
+        Экспорт: <a class="row-link" href="/export/products.csv">products.csv</a> ·
+        <a class="row-link" href="/export/anomalies.csv">anomalies.csv</a>
+    </p>
+</div>
+<script>
+(function () {
+    const shopLabels = {{ shop_labels_json|safe }};
+    const shopCounts = {{ shop_counts_json|safe }};
+    const trendLabels = {{ trend_labels_json|safe }};
+    const trendValues = {{ trend_values_json|safe }};
+    const chartColor = '#3d8bfd';
+    const gridColor = 'rgba(139, 156, 179, 0.25)';
+    if (document.getElementById('shopsChart') && shopLabels.length) {
+        new Chart(document.getElementById('shopsChart'), {
+            type: 'bar',
+            data: {
+                labels: shopLabels,
+                datasets: [{ label: 'Товаров', data: shopCounts, backgroundColor: chartColor }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor } },
+                    y: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor }, beginAtZero: true }
+                }
+            }
+        });
+    }
+    if (document.getElementById('trendChart') && trendLabels.length) {
+        new Chart(document.getElementById('trendChart'), {
+            type: 'line',
+            data: {
+                labels: trendLabels,
+                datasets: [{
+                    label: 'Средняя цена, ₽',
+                    data: trendValues,
+                    borderColor: chartColor,
+                    backgroundColor: 'rgba(61, 139, 253, 0.15)',
+                    fill: true,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#e7ecf3' } } },
+                scales: {
+                    x: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor } },
+                    y: { ticks: { color: '#8b9cb3' }, grid: { color: gridColor } }
+                }
+            }
+        });
+    }
+})();
+</script>
+{% endblock %}

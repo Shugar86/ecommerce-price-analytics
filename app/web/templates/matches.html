@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Сопоставление номенклатуры{% endblock %}
+{% block content %}
+<div class="card">
+    <p class="muted" style="margin-top:0;">Пары товаров с высокой косинусной близостью TF-IDF между каталогами (по умолчанию EKF ↔ TDM).</p>
+</div>
+
+<div class="card">
+    {% if pairs %}
+    <table>
+        <thead>
+            <tr>
+                <th>Score</th>
+                <th>Товар A</th>
+                <th>Товар B</th>
+                <th>Метод</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for m in pairs %}
+            {% set pa = products.get(m.product_low_id) %}
+            {% set pb = products.get(m.product_high_id) %}
+        <tr>
+            <td>{{ "%.3f"|format(m.score) }}</td>
+            <td>
+                {% if pa %}
+                <a class="row-link" href="/products/{{ pa.id }}">{{ pa.name[:70] }}</a>
+                <span class="badge">{{ pa.source_shop }}</span>
+                {% else %}#{{ m.product_low_id }}{% endif %}
+            </td>
+            <td>
+                {% if pb %}
+                <a class="row-link" href="/products/{{ pb.id }}">{{ pb.name[:70] }}</a>
+                <span class="badge">{{ pb.source_shop }}</span>
+                {% else %}#{{ m.product_high_id }}{% endif %}
+            </td>
+            <td>{{ m.method }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Сопоставлений нет. Запустите ИИ-воркер при наличии товаров EKF и TDM Electric.</p>
+    {% endif %}
+</div>
+{% endblock %}

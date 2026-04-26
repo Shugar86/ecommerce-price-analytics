@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Товары{% endblock %}
+{% block content %}
+<div class="card">
+    <form method="get" action="/products" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
+        <label class="muted">Поиск</label>
+        <input type="text" name="q" value="{{ q }}" placeholder="например e27 e40" maxlength="200">
+        <label class="muted">Источник</label>
+        <select name="shop">
+            <option value="">Все</option>
+            {% for s in shops %}
+            <option value="{{ s }}" {% if shop == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Найти</button>
+        <a class="row-link" href="/export/products.csv?q={{ q|urlencode }}&shop={{ shop|urlencode }}">CSV</a>
+    </form>
+</div>
+
+<div class="card">
+    <p class="muted" style="margin-top:0;">
+        Найдено: показано <strong>{{ products|length }}</strong> из <strong>{{ total_matching }}</strong>
+        {% if total_matching > products|length %} (лимит списка 200){% endif %}
+    </p>
+    {% if products %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Название</th>
+                <th>Цена ₽</th>
+                <th>Источник</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for p in products %}
+            <tr>
+                <td><a class="row-link" href="/products/{{ p.id }}">{{ p.id }}</a></td>
+                <td>{{ p.name[:120] }}{% if p.name|length > 120 %}…{% endif %}</td>
+                <td>{{ "%.2f"|format(p.price_in_rub) }}</td>
+                <td><span class="badge">{{ p.source_shop }}</span></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Ничего не найдено. Проверьте запрос или загрузку данных.</p>
+    {% endif %}
+</div>
+{% endblock %}
