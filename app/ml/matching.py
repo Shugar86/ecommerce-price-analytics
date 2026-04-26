@@ -1,18 +1,32 @@
 """
-Сопоставление офферов: exact-first, TF-IDF только для кандидатов ручного ревью.
+Сопоставление офферов: exact-first; fuzzy-ветка — Jaccard по транслитерованным токенам
+(``name_only_score``), без sklearn на пару. Legacy TF-IDF остаётся в ``app/ml/tfidf_pairs.py``.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from app.matching.text import name_only_score
 
 FUZZY_TFIDF_REVIEW_MIN = 0.45
+"""Устаревший порог (косинус TF-IDF); сохранён для совместимости импортов."""
+
+FUZZY_NAME_JACCARD_MIN = 0.32
+"""Минимум ``name_only_score`` для fuzzy-кандидата (ручное ревью)."""
+
 FUZZY_KIND_PREFIX = "fuzzy"
+
+
+def _fuzzy_jaccard_threshold() -> float:
+    """Читает ``FUZZY_NAME_JACCARD_MIN`` из env или дефолт."""
+    raw = os.getenv("FUZZY_NAME_JACCARD_MIN")
+    if raw is None or not str(raw).strip():
+        return float(FUZZY_NAME_JACCARD_MIN)
+    return float(str(raw).strip().replace(",", "."))
 
 
 @dataclass(frozen=True)
@@ -163,35 +177,14 @@ def match_pair(
     t_a = str(n_a or "").strip()
     t_b = str(n_b or "").strip()
     if t_a and t_b:
-        score = _tfidf_pair_score(t_a, t_b)
-        if score is not None and score >= FUZZY_TFIDF_REVIEW_MIN:
+        score = float(name_only_score(t_a, t_b))
+        if score >= _fuzzy_jaccard_threshold():
             return MatchResult(
                 float(round(score, 4)),
-                "fuzzy_tfidf",
+                "fuzzy_jaccard",
                 is_automated=False,
             )
     return None
-
-
-def _tfidf_pair_score(text_a: str, text_b: str) -> float | None:
-    """Косинусная близость по TF-IDF для одной пары строк."""
-    if not text_a or not text_b:
-        return None
-    try:
-        vectorizer = TfidfVectorizer(
-            max_features=256,
-            ngram_range=(1, 2),
-            min_df=1,
-            lowercase=True,
-        )
-        m = vectorizer.fit_transform([text_a, text_b])
-        sim = cosine_similarity(m[0:1], m[1:2])[0, 0]
-        return float(sim)
-    except (ValueError, TypeError) as e:
-        # sklearn может упасть на слишком коротких/пустых токенах
-        if "empty" in str(e).lower():
-            return None
-        return None
 
 
 def is_fuzzy_for_review_only(kind: str) -> bool:

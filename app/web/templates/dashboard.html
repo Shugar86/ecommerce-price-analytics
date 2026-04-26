@@ -26,7 +26,7 @@
     <div class="card">
         <div class="card-title">Matching и источники</div>
         <div class="attention-list">
-            <div class="attention-item ai-info"><span>Кандидаты TF-IDF (только ревью): <strong>{{ today.pending_fuzzy_n }}</strong></span> <a class="ai-link" href="/matches">Сопоставления</a></div>
+            <div class="attention-item ai-info"><span>Fuzzy-кандидаты по имени (ревью): <strong>{{ today.pending_fuzzy_n }}</strong></span> <a class="ai-link" href="/matches">Сопоставления</a></div>
             <div class="attention-item ai-muted"><span>Источник не обновлялся &gt;48ч: <strong>{{ today.stale_source_n }}</strong></span> <a class="ai-link" href="/sources">Источники</a></div>
             <div class="attention-item ai-muted"><span>Низкий usable_score (&lt;порог KPI): <strong>{{ today.low_usable_n }}</strong></span> <a class="ai-link" href="/sources">Источники</a></div>
         </div>

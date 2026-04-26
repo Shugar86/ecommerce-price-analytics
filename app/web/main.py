@@ -43,6 +43,7 @@ from app.analytics.price_intelligence import load_market_rows, our_pricing_sourc
 from app.matching.source_pairs import parse_ai_match_source_pairs
 from app.web.services import (
     build_dashboard_template_context,
+    list_price_diff_rows,
     list_source_health_rows,
 )
 
@@ -130,7 +131,7 @@ app = FastAPI(
     title="PriceDesk — ценовая аналитика e-commerce",
     description=(
         "Мониторинг прайс-листов, история цен, эвристики аномалий и ассистированное сопоставление "
-        "позиций по TF-IDF. Кандидаты сопоставления — подсказки для аналитика, не автоматическое "
+        "позиций (exact-first + fuzzy по Jaccard имён). Кандидаты сопоставления — подсказки для аналитика, не автоматическое "
         "объединение каталогов (см. docs/PRODUCT_SCOPE.md)."
     ),
     version="1.0.0",
@@ -177,6 +178,21 @@ def dashboard(request: Request, session: SessionDep) -> HTMLResponse:
     """Главная страница: сводные метрики."""
     ctx = build_dashboard_template_context(session)
     return templates.TemplateResponse(request, "dashboard.html", ctx)
+
+
+@router.get("/price-diff", response_class=HTMLResponse)
+def price_diff(
+    request: Request,
+    session: SessionDep,
+    limit: int = Query(200, ge=1, le=2000),
+) -> HTMLResponse:
+    """Межисточниковые дельты цен по каноническим карточкам (≥2 источника)."""
+    rows = list_price_diff_rows(session, limit=limit)
+    return templates.TemplateResponse(
+        request,
+        "price_diff.html",
+        {"rows": rows, "limit": limit},
+    )
 
 
 @router.get("/products", response_class=HTMLResponse)

@@ -18,6 +18,7 @@ from sqlalchemy import and_, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.database import (
+    MATCH_KIND_FUZZY_JACCARD,
     MATCH_KIND_FUZZY_TFIDF,
     MATCH_STATUS_SUGGESTED,
     NormalizedOffer,
@@ -32,7 +33,8 @@ from app.database import (
 )
 from app.matching.source_pairs import parse_ai_match_source_pairs
 from app.ml.anomalies import detect_price_anomalies
-from app.ml.matching import match_pair
+from app.matching.text import tokenize_for_match
+from app.ml.matching import extract_model, match_pair
 from app.ml.tfidf_pairs import filter_greedy_one_to_one, find_cross_shop_pairs
 
 logging.basicConfig(
@@ -71,6 +73,28 @@ USE_LEGACY_PRODUCT_MATCHING = os.getenv(
 AI_MATCH_NORMALIZED_LEFT = os.getenv("AI_MATCH_NORMALIZED_LEFT", "EKF YML")
 AI_MATCH_NORMALIZED_RIGHT = os.getenv("AI_MATCH_NORMALIZED_RIGHT", "TDM Electric")
 AI_MATCH_OFFER_CAP = _env_int("AI_MATCH_OFFER_CAP", 400)
+
+_FUZZY_BLOCK_TOKENS = os.getenv(
+    "AI_MATCH_BLOCK_NO_TOKEN_OVERLAP", "1"
+).strip().lower() not in ("0", "false", "no", "")
+
+
+def _skip_heavy_fuzzy_pair(a: NormalizedOffer, b: NormalizedOffer) -> bool:
+    """
+    Быстрый отсев пар без общих значимых токенов и без совпадения model-токена.
+
+    Снижает число вызовов ``match_pair`` в вложенных циклах.
+    """
+    if not _FUZZY_BLOCK_TOKENS:
+        return False
+    na, nb = str(a.name or ""), str(b.name or "")
+    ta, tb = tokenize_for_match(na), tokenize_for_match(nb)
+    if ta and tb and (ta & tb):
+        return False
+    ma, mb = extract_model(na), extract_model(nb)
+    if ma and mb and ma == mb:
+        return False
+    return True
 
 
 def _history_prices(session: Session, product_id: int, *, limit: int = 40) -> list[float]:
@@ -134,7 +158,9 @@ def run_ai_cycle() -> None:
         session.execute(
             delete(NormalizedOfferMatch).where(
                 and_(
-                    NormalizedOfferMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                    NormalizedOfferMatch.match_kind.in_(
+                        [MATCH_KIND_FUZZY_TFIDF, MATCH_KIND_FUZZY_JACCARD]
+                    ),
                     NormalizedOfferMatch.match_status == MATCH_STATUS_SUGGESTED,
                 )
             )
@@ -205,6 +231,8 @@ def run_ai_cycle() -> None:
                 for b in right_offers:
                     if a.id == b.id:
                         continue
+                    if _skip_heavy_fuzzy_pair(a, b):
+                        continue
                     res = match_pair(a, b)
                     if res is None or res.is_automated:
                         continue
@@ -216,7 +244,7 @@ def run_ai_cycle() -> None:
                             offer_low_id=lo,
                             offer_high_id=hi,
                             score=float(res.confidence),
-                            method="tfidf_cosine",
+                            method="name_jaccard",
                             match_kind=res.kind,
                             match_status=MATCH_STATUS_SUGGESTED,
                         )

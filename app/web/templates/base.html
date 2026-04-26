@@ -283,6 +283,7 @@
     <nav>
         <a href="/" {% if request.url.path == "/" %}class="nav-active"{% endif %}>Сегодня</a>
         <a href="/market" {% if request.url.path == "/market" %}class="nav-active"{% endif %}>Рынок</a>
+        <a href="/price-diff" {% if request.url.path == "/price-diff" %}class="nav-active"{% endif %}>Дельты</a>
         <a href="/sources" {% if request.url.path == "/sources" %}class="nav-active"{% endif %}>Источники</a>
         <a href="/products" {% if request.url.path.startswith("/products") %}class="nav-active"{% endif %}>Товары</a>
         <a href="/alerts" {% if request.url.path == "/alerts" %}class="nav-active"{% endif %}>Алерты</a>

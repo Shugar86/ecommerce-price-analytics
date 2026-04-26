@@ -7,12 +7,12 @@ from __future__ import annotations
 import os
 import statistics
 from dataclasses import dataclass
-from typing import Any, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import (
+    MATCH_KIND_FUZZY_JACCARD,
     MATCH_KIND_FUZZY_TFIDF,
     MATCH_STATUS_SUGGESTED,
     CanonicalProduct,
@@ -295,7 +295,9 @@ def compute_today_action_counts(
     pending_offer = int(
         session.scalar(
             select(func.count(NormalizedOfferMatch.id)).where(
-                NormalizedOfferMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                NormalizedOfferMatch.match_kind.in_(
+                    [MATCH_KIND_FUZZY_TFIDF, MATCH_KIND_FUZZY_JACCARD]
+                ),
                 NormalizedOfferMatch.match_status == MATCH_STATUS_SUGGESTED,
             )
         )

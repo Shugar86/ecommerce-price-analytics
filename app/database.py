@@ -177,6 +177,7 @@ class PriceAnomaly(Base):
 
 # How the link was produced: automatic fuzzy vs future exact keys.
 MATCH_KIND_FUZZY_TFIDF = "fuzzy_tfidf"
+MATCH_KIND_FUZZY_JACCARD = "fuzzy_jaccard"
 MATCH_KIND_EXACT_BARCODE = "exact_barcode"
 MATCH_KIND_EXACT_VENDOR = "exact_vendor"
 MATCH_KIND_EXACT_NAME_NORM = "exact_name_norm"

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Ценовые дельты — PriceDesk{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Ценовые дельты между источниками</h1>
+    <div class="page-subtitle">
+        Канонические карточки с минимум двумя разными источниками в <code>normalized_offers</code>.
+        Сортировка: по относительной дельте (дороже минимума). Показано до {{ limit }} строк.
+    </div>
+</div>
+
+{% if not rows %}
+<div class="empty-state">
+    <div class="empty-icon">—</div>
+    <p>Нет данных: запустите collector и убедитесь, что <code>rebuild_canonical_from_normalized</code> создал связки из нескольких источников.</p>
+</div>
+{% else %}
+<div class="card" style="overflow-x:auto">
+    <table class="data-table" style="width:100%; border-collapse:collapse; font-size:0.82rem">
+        <thead>
+            <tr style="text-align:left; border-bottom:1px solid var(--border)">
+                <th style="padding:0.5rem">Канон</th>
+                <th style="padding:0.5rem">Наименование</th>
+                <th style="padding:0.5rem">Бренд</th>
+                <th style="padding:0.5rem">Артикул</th>
+                <th style="padding:0.5rem">Дешевле</th>
+                <th style="padding:0.5rem">Цена min</th>
+                <th style="padding:0.5rem">Дороже</th>
+                <th style="padding:0.5rem">Цена max</th>
+                <th style="padding:0.5rem">Δ %</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:0.45rem">{{ r.canonical_id }}</td>
+                <td style="padding:0.45rem; max-width:280px">{{ r.name or "—" }}</td>
+                <td style="padding:0.45rem">{{ r.brand or "—" }}</td>
+                <td style="padding:0.45rem"><code>{{ r.vendor_code or "—" }}</code></td>
+                <td style="padding:0.45rem; color:var(--success)">{{ r.min_source or "—" }}</td>
+                <td style="padding:0.45rem">{{ "%.2f"|format(r.min_price) }}</td>
+                <td style="padding:0.45rem; color:var(--warning)">{{ r.max_source or "—" }}</td>
+                <td style="padding:0.45rem">{{ "%.2f"|format(r.max_price) }}</td>
+                <td style="padding:0.45rem; font-weight:600" class="{% if r.delta_pct > 15 %}text-danger{% elif r.delta_pct > 5 %}text-warning{% endif %}">{{ "%.1f"|format(r.delta_pct) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

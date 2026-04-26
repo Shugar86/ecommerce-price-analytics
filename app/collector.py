@@ -65,6 +65,21 @@ def _env_int(name: str, default: int) -> int:
     return int(str(raw).strip(), 10)
 
 
+def _skip_product_upsert_for_shop(source_shop: str) -> bool:
+    """
+    При ``SKIP_PRODUCT_UPSERT=1`` не обновляем legacy-таблицу ``products`` для фидов,
+    у которых источник истины — ``normalized_offers`` (EKF, TDM). Бот/старые экраны
+    по-прежнему могут читать ``products``, пока не мигрированы.
+    """
+    if os.getenv("SKIP_PRODUCT_UPSERT", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return False
+    return source_shop in ("EKF", "TDM Electric")
+
+
 def _log_etl_source_summary(session) -> None:
     """
     Сводка по source_health после цикла (лог-строка JSON для парсинга/мониторинга).
@@ -614,12 +629,13 @@ def _tdm_try_process_xls_row(
         barcode=barcode,
         vendor_code=vendor_code,
     )
-    _apply_product_upsert(
-        session,
-        stmt,
-        external_id=external_id,
-        source_shop="TDM Electric",
-    )
+    if not _skip_product_upsert_for_shop("TDM Electric"):
+        _apply_product_upsert(
+            session,
+            stmt,
+            external_id=external_id,
+            source_shop="TDM Electric",
+        )
     return True
 
 
@@ -671,9 +687,10 @@ def fetch_ekf_goods(session) -> None:
                     vendor_code=row["vendor_code"],
                     category_id=row["category_id"],
                 )
-                _apply_product_upsert(
-                    session, stmt, external_id=external_id, source_shop="EKF"
-                )
+                if not _skip_product_upsert_for_shop("EKF"):
+                    _apply_product_upsert(
+                        session, stmt, external_id=external_id, source_shop="EKF"
+                    )
                 saved_count += 1
                 norm_rows.append(
                     {
@@ -681,6 +698,7 @@ def fetch_ekf_goods(session) -> None:
                         "price_rub": row["price_in_rub"],
                         "vendor_code": row["vendor_code"],
                         "barcode": row["barcode"],
+                        "brand": "EKF",
                         "category": row.get("category_id"),
                         "url": row.get("url"),
                         "external_id": external_id,

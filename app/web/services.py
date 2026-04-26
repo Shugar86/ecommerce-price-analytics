@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Date, cast, func, select
+from sqlalchemy import Date, cast, func, select, text
 from sqlalchemy.orm import Session
 
 from app.database import (
+    MATCH_KIND_FUZZY_JACCARD,
     MATCH_KIND_FUZZY_TFIDF,
     MATCH_STATUS_CONFIRMED,
     MATCH_STATUS_REJECTED,
@@ -17,7 +19,6 @@ from app.database import (
     NormalizedOfferMatch,
     PriceAnomaly,
     PriceHistory,
-    Product,
     ProductMatch,
 )
 from app.analytics.price_intelligence import (
@@ -61,7 +62,9 @@ def build_dashboard_template_context(session: Session) -> dict[str, Any]:
         (
             session.scalar(
                 select(func.count(NormalizedOfferMatch.id)).where(
-                    NormalizedOfferMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                    NormalizedOfferMatch.match_kind.in_(
+                        [MATCH_KIND_FUZZY_TFIDF, MATCH_KIND_FUZZY_JACCARD]
+                    ),
                     NormalizedOfferMatch.match_status == MATCH_STATUS_SUGGESTED,
                 )
             )
@@ -173,3 +176,98 @@ def build_dashboard_template_context(session: Session) -> dict[str, Any]:
         "today": today,
         **quality,
     }
+
+
+@dataclass(frozen=True)
+class PriceDiffRow:
+    """Строка отчёта межисточниковой дельты по канонической карточке."""
+
+    canonical_id: int
+    name: str | None
+    brand: str | None
+    vendor_code: str | None
+    min_price: float
+    max_price: float
+    delta_pct: float
+    min_source: str | None
+    max_source: str | None
+
+
+def list_price_diff_rows(session: Session, *, limit: int = 200) -> list[PriceDiffRow]:
+    """
+    Канонические SKU с ценами минимум из двух источников: дешёвый/дорогой и дельта %%.
+
+    Args:
+        session: Сессия БД.
+        limit: Максимум строк (по убыванию относительной дельты).
+
+    Returns:
+        Список строк для таблицы ``/price-diff``.
+    """
+    lim = max(1, min(int(limit), 2000))
+    sql = text(
+        """
+        SELECT
+            cp.id,
+            cp.canonical_name,
+            cp.brand,
+            cp.vendor_code,
+            agg.pmin,
+            agg.pmax,
+            CASE
+                WHEN agg.pmin > 0 THEN
+                    ROUND(100.0 * (agg.pmax - agg.pmin) / agg.pmin, 2)
+                ELSE 0
+            END AS delta_pct,
+            (
+                SELECT n.source_name
+                FROM normalized_offers n
+                WHERE n.canonical_product_id = cp.id
+                  AND n.price_rub = agg.pmin
+                  AND n.price_rub IS NOT NULL
+                ORDER BY n.id
+                LIMIT 1
+            ) AS min_source,
+            (
+                SELECT n.source_name
+                FROM normalized_offers n
+                WHERE n.canonical_product_id = cp.id
+                  AND n.price_rub = agg.pmax
+                  AND n.price_rub IS NOT NULL
+                ORDER BY n.id
+                LIMIT 1
+            ) AS max_source
+        FROM canonical_products cp
+        INNER JOIN (
+            SELECT
+                canonical_product_id,
+                MIN(price_rub) AS pmin,
+                MAX(price_rub) AS pmax
+            FROM normalized_offers
+            WHERE canonical_product_id IS NOT NULL
+              AND price_rub IS NOT NULL
+            GROUP BY canonical_product_id
+            HAVING COUNT(DISTINCT source_name) >= 2
+        ) agg ON agg.canonical_product_id = cp.id
+        WHERE agg.pmin > 0
+        ORDER BY (agg.pmax - agg.pmin) / agg.pmin DESC
+        LIMIT :lim
+        """
+    )
+    rows = session.execute(sql, {"lim": lim}).all()
+    out: list[PriceDiffRow] = []
+    for r in rows:
+        out.append(
+            PriceDiffRow(
+                canonical_id=int(r[0]),
+                name=r[1],
+                brand=r[2],
+                vendor_code=r[3],
+                min_price=float(r[4] or 0),
+                max_price=float(r[5] or 0),
+                delta_pct=float(r[6] or 0),
+                min_source=r[7],
+                max_source=r[8],
+            )
+        )
+    return out

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.ml.matching import (
     is_fuzzy_for_review_only,
     match_pair,
@@ -48,6 +46,7 @@ def test_vendor_brand_pair() -> None:
 def test_fuzzy_is_not_automated() -> None:
     """Fuzzy only для ревью."""
     assert is_fuzzy_for_review_only("fuzzy_tfidf") is True
+    assert is_fuzzy_for_review_only("fuzzy_jaccard") is True
     a = {
         "barcode": None,
         "name": "Автомат однополюсный 10А C",
@@ -63,8 +62,9 @@ def test_fuzzy_is_not_automated() -> None:
         "category": None,
     }
     r = match_pair(a, b)
-    if r is not None and r.kind == "fuzzy_tfidf":
-        assert r.is_automated is False
+    assert r is not None
+    assert r.kind == "fuzzy_jaccard"
+    assert r.is_automated is False
 
 
 def test_empty_returns_none() -> None:
