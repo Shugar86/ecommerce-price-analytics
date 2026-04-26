@@ -13,10 +13,12 @@ from datetime import datetime, timedelta
 
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.database import (
+    MATCH_KIND_FUZZY_TFIDF,
+    MATCH_STATUS_SUGGESTED,
     PriceAnomaly,
     PriceForecast,
     PriceHistory,
@@ -27,7 +29,7 @@ from app.database import (
     init_db,
 )
 from app.ml.anomalies import detect_price_anomalies
-from app.ml.tfidf_pairs import find_cross_shop_pairs
+from app.ml.tfidf_pairs import filter_greedy_one_to_one, find_cross_shop_pairs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 AI_INTERVAL_SEC = int(os.getenv("AI_WORKER_INTERVAL_SEC", "300"))
 MATCH_LIMIT_PER_SHOP = int(os.getenv("AI_MATCH_LIMIT_PER_SHOP", "500"))
+# TF-IDF cosine floor (0–1). Default raised from 0.28 to limit weak title-only links.
+# Scope: EKF vs TDM Electric only; see docs/PRODUCT_SCOPE.md.
+AI_MATCH_MIN_SCORE = float(os.getenv("AI_MATCH_MIN_SCORE", "0.45"))
 FORECAST_MIN_POINTS = int(os.getenv("AI_FORECAST_MIN_POINTS", "5"))
 
 
@@ -98,7 +103,15 @@ def run_ai_cycle() -> None:
         _seed_demo_history(session)
 
         session.execute(delete(PriceAnomaly))
-        session.execute(delete(ProductMatch))
+        # Only replace auto TF-IDF *suggestions*; keep analyst-confirmed/rejected rows.
+        session.execute(
+            delete(ProductMatch).where(
+                and_(
+                    ProductMatch.match_kind == MATCH_KIND_FUZZY_TFIDF,
+                    ProductMatch.match_status == MATCH_STATUS_SUGGESTED,
+                )
+            )
+        )
         session.execute(delete(PriceForecast))
 
         pids = session.execute(
@@ -141,9 +154,15 @@ def run_ai_cycle() -> None:
             names_b = [str(r[1]) for r in tdm_rows]
             ids_a = [int(r[0]) for r in ekf_rows]
             ids_b = [int(r[0]) for r in tdm_rows]
-            pairs = find_cross_shop_pairs(names_a, names_b, min_score=0.28, max_pairs=400)
-            pairs_count = len(pairs)
-            for pair in pairs:
+            raw = find_cross_shop_pairs(
+                names_a,
+                names_b,
+                min_score=AI_MATCH_MIN_SCORE,
+                max_pairs=2000,
+            )
+            one_to_one = filter_greedy_one_to_one(raw)[:400]
+            pairs_count = len(one_to_one)
+            for pair in one_to_one:
                 ia, ib = ids_a[pair.idx_a], ids_b[pair.idx_b]
                 low, high = (ia, ib) if ia < ib else (ib, ia)
                 session.add(
@@ -152,6 +171,8 @@ def run_ai_cycle() -> None:
                         product_high_id=high,
                         score=pair.score,
                         method="tfidf_cosine",
+                        match_kind=MATCH_KIND_FUZZY_TFIDF,
+                        match_status=MATCH_STATUS_SUGGESTED,
                     )
                 )
 

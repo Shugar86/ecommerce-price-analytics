@@ -1,6 +1,9 @@
 # Секретные данные
 .env
 
+# Локальные overrides Docker (порты и т.д.)
+docker-compose.override.yml
+
 # Python
 __pycache__/
 *.py[cod]

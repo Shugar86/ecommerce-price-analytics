@@ -81,15 +81,18 @@
 
 {% if matches %}
 <div class="card">
-    <h3 style="margin-top:0;font-size:1rem;">Похожие товары (TF-IDF)</h3>
+    <h3 style="margin-top:0;font-size:1rem;">Связанные позиции (кандидаты / сопоставления)</h3>
+    <p class="muted" style="margin-top:0;">По сходству наименований (TF‑IDF) или после ревью. Отклонённые пары в список не попадают.</p>
     <table>
-        <thead><tr><th>Score</th><th>Товар</th></tr></thead>
+        <thead><tr><th>Score</th><th>Статус</th><th>Тип</th><th>Товар</th></tr></thead>
         <tbody>
         {% for m in matches %}
             {% set oid = m.product_high_id if m.product_low_id == product.id else m.product_low_id %}
             {% set op = match_products.get(oid) %}
             <tr>
                 <td>{{ "%.3f"|format(m.score) }}</td>
+                <td><span class="badge">{{ m.match_status }}</span></td>
+                <td class="muted">{{ m.match_kind }}</td>
                 <td>
                     {% if op %}
                     <a class="row-link" href="/products/{{ op.id }}">{{ op.name[:100] }}</a>

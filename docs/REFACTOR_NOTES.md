@@ -8,6 +8,8 @@
 
 Логика нормализации `name_norm` и эвристик `/compare` вынесена в пакет `app/matching/`. ETL и бот используют один модуль, чтобы не расходилось поведение поиска.
 
+**Честный объём продукта (кандидаты + exact-метрики, не «магичный matching»):** см. [PRODUCT_SCOPE.md](PRODUCT_SCOPE.md). Для `product_matches` добавлены `match_kind` / `match_status`; `app/quality/coverage.py` питает дашборд.
+
 ## Второй проход (консолидация)
 
 - Публичные хелперы в `app.matching.text`: `jaccard_similarity_sets`, `transliterate_ru_to_latin`, `normalize_for_match_scoring` — переиспользуются в `overlap_report` и `tdm_ekf_report` (где уместно; regex модельных токенов в отчётах намеренно отличается от бота).

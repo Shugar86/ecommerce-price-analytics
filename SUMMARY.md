@@ -3,9 +3,9 @@
 ## ✅ ЧТО РЕАЛИЗОВАНО
 
 ### 🌐 Веб и ИИ (ВКР / практика)
-- **Веб-приложение аналитика:** FastAPI + Jinja2, порт **8000** (`app/web/`) — дашборд, поиск, графики истории цен, аномалии, TF-IDF-сопоставления, CSV.
-- **ИИ-воркер:** `app/ai_worker.py` + `app/ml/` — аномалии в рядах цен, TF-IDF пары EKF↔TDM, линейный прогноз; таблицы `price_history`, `price_anomalies`, `product_matches`, `price_forecasts`.
-- **Текст ВКР/практики:** **[VKR_AND_PRACTICE_REPORT.md](VKR_AND_PRACTICE_REPORT.md)** (главы 1–3).
+- **Веб-приложение аналитика:** FastAPI + Jinja2, порт **8000** (`app/web/`) — дашборд, поиск, графики истории цен, аномалии, **кандидаты** TF‑IDF (ревью в UI), метрики полноты полей и exact-пересечений ключей, CSV.
+- **Воркер аналитики:** `app/ai_worker.py` + `app/ml/` — аномалии, TF‑IDF-кандидаты EKF↔TDM (порог `AI_MATCH_MIN_SCORE`, one-to-one), линейный прогноз; `app/quality/coverage.py` — агрегаты для дашборда. Таблицы `price_history`, `price_anomalies`, `product_matches` (с `match_kind` / `match_status`), `price_forecasts`.
+- **Текст ВКР/практики:** **[VKR_AND_PRACTICE_REPORT.md](VKR_AND_PRACTICE_REPORT.md)** (главы 1–3). Честные формулировки по сопоставлению: **[docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md)**.
 
 ### 🏗️ Архитектура
 - **6+ Docker-сервисов:** PostgreSQL, Adminer, Collector (ETL), **Web**, **AI worker**, Telegram Bot
@@ -32,6 +32,7 @@
 
 ### 📄 Документация
 - **README.md** — Быстрый старт (5 минут до запуска)
+- **docs/PRODUCT_SCOPE.md** — объём сопоставления (кандидаты, exact-метрики, формулировки)
 - **README_REPORT.md** — Полная документация для пояснительной записки
 - **ENV_SETUP.md** — Пошаговая настройка .env файла
 - **FAQ.md** — Часто задаваемые вопросы и решения проблем

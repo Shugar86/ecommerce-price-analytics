@@ -15,8 +15,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Generator
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select, text
@@ -25,6 +25,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from urllib.parse import quote_plus
 
 from app.database import (
+    MATCH_STATUS_CONFIRMED,
+    MATCH_STATUS_REJECTED,
+    MATCH_STATUS_SUGGESTED,
     PriceAnomaly,
     PriceForecast,
     PriceHistory,
@@ -119,12 +122,14 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Аналитика цен e-commerce",
-    description="Микросервисное веб-приложение визуального анализа цен",
+    description=(
+        "Сбор прайс-листов, дашборд и эвристики. Сопоставления по TF-IDF — "
+        "кандидаты для просмотра, не гарантия одной сущности товара (см. docs/PRODUCT_SCOPE.md)."
+    ),
     version="1.0.0",
     lifespan=_lifespan,
 )
 templates.env.filters["urlencode"] = quote_plus
-app.include_router(router)
 
 
 class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -164,8 +169,7 @@ def ready() -> dict[str, str]:
 def dashboard(request: Request, session: SessionDep) -> HTMLResponse:
     """Главная страница: сводные метрики."""
     ctx = build_dashboard_template_context(session)
-    ctx["request"] = request
-    return templates.TemplateResponse("dashboard.html", ctx)
+    return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @router.get("/products", response_class=HTMLResponse)
@@ -184,9 +188,9 @@ def products_list(
     shops = session.execute(select(Product.source_shop).distinct().order_by(Product.source_shop)).scalars().all()
 
     return templates.TemplateResponse(
+        request,
         "products.html",
         {
-            "request": request,
             "products": rows,
             "shops": [s for s in shops if s],
             "q": q,
@@ -230,8 +234,11 @@ def product_detail(
     ).scalar_one_or_none()
 
     matches = session.execute(
-        select(ProductMatch).where(
-            (ProductMatch.product_low_id == product_id) | (ProductMatch.product_high_id == product_id)
+        select(ProductMatch)
+        .where(
+            (ProductMatch.product_low_id == product_id)
+            | (ProductMatch.product_high_id == product_id),
+            ProductMatch.match_status != MATCH_STATUS_REJECTED,
         )
     ).scalars().all()
     other_ids: list[int] = []
@@ -245,9 +252,9 @@ def product_detail(
             others[oid] = p
 
     return templates.TemplateResponse(
+        request,
         "product_detail.html",
         {
-            "request": request,
             "product": product,
             "chart_labels_json": json.dumps(chart_labels, ensure_ascii=False),
             "chart_values_json": json.dumps(chart_values, ensure_ascii=False),
@@ -269,14 +276,15 @@ def anomalies_page(request: Request, session: SessionDep) -> HTMLResponse:
         .limit(300)
     ).all()
     return templates.TemplateResponse(
+        request,
         "anomalies.html",
-        {"request": request, "rows": rows},
+        {"rows": rows},
     )
 
 
 @router.get("/matches", response_class=HTMLResponse)
 def matches_page(request: Request, session: SessionDep) -> HTMLResponse:
-    """Сопоставления EKF↔TDM (TF-IDF)."""
+    """Кандидаты сопоставления (TF-IDF) и их статус ревью."""
     pairs = session.execute(
         select(ProductMatch).order_by(ProductMatch.score.desc()).limit(200)
     ).scalars().all()
@@ -288,9 +296,29 @@ def matches_page(request: Request, session: SessionDep) -> HTMLResponse:
                 if p:
                     products[pid] = p
     return templates.TemplateResponse(
+        request,
         "matches.html",
-        {"request": request, "pairs": pairs, "products": products},
+        {"pairs": pairs, "products": products},
     )
+
+
+@router.post("/matches/{match_id}/status", response_class=RedirectResponse)
+def set_match_status(
+    session: SessionDep,
+    match_id: int,
+    status: str = Form(...),
+) -> RedirectResponse:
+    """Подтвердить или отклонить кандидат сопоставления (для аналитика)."""
+    if status not in (MATCH_STATUS_CONFIRMED, MATCH_STATUS_REJECTED):
+        raise HTTPException(status_code=400, detail="status must be confirmed or rejected")
+    row = session.get(ProductMatch, match_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    if row.match_status != MATCH_STATUS_SUGGESTED:
+        raise HTTPException(status_code=400, detail="only suggested candidates can be reviewed")
+    row.match_status = status
+    session.commit()
+    return RedirectResponse(url="/matches", status_code=303)
 
 
 @router.get("/export/products.csv")
@@ -363,3 +391,7 @@ def export_anomalies_csv(session: SessionDep) -> Response:
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="anomalies.csv"'},
     )
+
+
+# Подключаем router после всех @router.get — иначе include_router срабатывает с пустым набором маршрутов.
+app.include_router(router)

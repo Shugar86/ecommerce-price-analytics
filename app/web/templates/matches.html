@@ -2,7 +2,11 @@
 {% block title %}Сопоставление номенклатуры{% endblock %}
 {% block content %}
 <div class="card">
-    <p class="muted" style="margin-top:0;">Пары товаров с высокой косинусной близостью TF-IDF между каталогами (по умолчанию EKF ↔ TDM).</p>
+    <p class="muted" style="margin-top:0;">
+        <strong>Кандидаты</strong> по сходству наименований (TF‑IDF, косинусная близость) для пары
+        <span class="badge">EKF</span> ↔ <span class="badge">TDM Electric</span> — это <em>не</em> гарантия одного товара.
+        Подтверждайте или отклоняйте пары вручную. Порог и объём: переменные <code>AI_MATCH_MIN_SCORE</code>, <code>AI_MATCH_LIMIT_PER_SHOP</code> в <code>app/ai_worker.py</code> / <code>env.example</code>.
+    </p>
 </div>
 
 <div class="card">
@@ -10,10 +14,13 @@
     <table>
         <thead>
             <tr>
+                <th>ID</th>
                 <th>Score</th>
+                <th>Тип / статус</th>
                 <th>Товар A</th>
                 <th>Товар B</th>
                 <th>Метод</th>
+                <th>Ревью</th>
             </tr>
         </thead>
         <tbody>
@@ -21,7 +28,9 @@
             {% set pa = products.get(m.product_low_id) %}
             {% set pb = products.get(m.product_high_id) %}
         <tr>
+            <td class="muted">{{ m.id }}</td>
             <td>{{ "%.3f"|format(m.score) }}</td>
+            <td><span class="badge">{{ m.match_kind }}</span> <span class="badge">{{ m.match_status }}</span></td>
             <td>
                 {% if pa %}
                 <a class="row-link" href="/products/{{ pa.id }}">{{ pa.name[:70] }}</a>
@@ -35,12 +44,26 @@
                 {% else %}#{{ m.product_high_id }}{% endif %}
             </td>
             <td>{{ m.method }}</td>
+            <td>
+                {% if m.match_status == "suggested" %}
+                <form method="post" action="/matches/{{ m.id }}/status" style="display:inline;">
+                    <input type="hidden" name="status" value="confirmed" />
+                    <button type="submit" title="Подтвердить">ОК</button>
+                </form>
+                <form method="post" action="/matches/{{ m.id }}/status" style="display:inline;">
+                    <input type="hidden" name="status" value="rejected" />
+                    <button type="submit" title="Отклонить" style="background:#5c6b7d;border-color:#5c6b7d;">✕</button>
+                </form>
+                {% else %}
+                <span class="muted">—</span>
+                {% endif %}
+            </td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <p class="muted">Сопоставлений нет. Запустите ИИ-воркер при наличии товаров EKF и TDM Electric.</p>
+    <p class="muted">Кандидатов нет. Запустите ИИ-воркер при наличии товаров EKF и TDM Electric (см. docs/PRODUCT_SCOPE.md).</p>
     {% endif %}
 </div>
 {% endblock %}

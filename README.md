@@ -1,6 +1,8 @@
 # Микросервисное приложение сбора и визуального анализа цен (e-commerce)
 
-Проект подходит для **ВКР / отчёта по практике**: микросервисная архитектура (Docker), **веб-приложение аналитика** (основной интерфейс), **ИИ-воркер** (аномалии цен, TF-IDF сопоставление, прогноз), Telegram-бот (дополнительный канал).
+Проект подходит для **ВКР / отчёта по практике**: микросервисная архитектура (Docker), **веб-приложение аналитика** (основной интерфейс), **воркер аналитики** (аномалии цен, **кандидаты** пересечения наименований по TF‑IDF в связке EKF↔TDM, простой прогноз), Telegram-бот (дополнительный канал).
+
+**Сопоставление товаров между магазинами** в репозитории реализовано как **подсказки по сходству названий** и **точные пересечения ключей** (дашборд: полнота полей и overlap по `barcode` / `vendor_code` / `name_norm`), с возможностью **подтвердить или отклонить** кандидат в веб-интерфейсе. Это **не** система гарантированного глобального сопоставления каталогов; см. **[docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md)**.
 
 ## Быстрый старт
 
@@ -21,11 +23,15 @@ POSTGRES_PORT=5432
 
 BOT_TOKEN=your_token_here_from_botfather
 
-# Демо-точки истории цен для графиков (1/0); ИИ-воркер
+# Демо-точки истории цен для графиков (1/0); воркер аналитики
 SEED_DEMO_HISTORY=1
 AI_WORKER_INTERVAL_SEC=300
-# Доп. переменные: см. [env.example](env.example) (SHOP_ITEM_LIMIT, AI_MATCH_LIMIT_PER_SHOP, …)
+# Порог TF‑IDF EKF↔TDM (кандидаты, см. docs/PRODUCT_SCOPE.md); по умолчанию 0.45
+# AI_MATCH_MIN_SCORE=0.45
+# Доп. переменные: [env.example](env.example) (SHOP_ITEM_LIMIT, AI_MATCH_LIMIT_PER_SHOP, …)
 ```
+
+После обновления кода с миграциями схема БД подтягивается при старте (`init_db` → Alembic). Файл **`alembic/versions/002_match_governance.py`** добавляет поля `match_kind` / `match_status` в `product_matches` для существующих инсталляций.
 
 ### 3. Запуск
 
@@ -49,7 +55,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | `adminer`  | Веб-админка БД (порт 8080 только с `docker-compose.dev.yml`) |
 | `collector`| ETL, сбор прайсов |
 | `web`      | **Аналитика** → http://localhost:8000 |
-| `ai_worker`| Пересчёт аномалий, TF-IDF, прогнозов |
+| `ai_worker`| Аномалии, кандидаты TF‑IDF (EKF↔TDM), прогнозы |
 | `bot`      | Telegram-бот |
 
 ### 4. Проверка
@@ -79,9 +85,10 @@ python3 -m venv .venv
 │   ├── collector.py         # ETL
 │   ├── price_history_util.py
 │   ├── matching/            # нормализация имён, эвристики сравнения (бот / ETL / отчёты)
+│   ├── quality/             # полнота полей + exact-пересечения для дашборда
 │   ├── services/            # общие read-запросы (например SQL для бота)
 │   ├── bot.py               # Telegram
-│   ├── ai_worker.py         # ИИ-контур
+│   ├── ai_worker.py         # аномалии, кандидаты TF‑IDF, прогноз
 │   ├── ml/                  # Аномалии, TF-IDF
 │   └── web/                 # FastAPI + Jinja2 + шаблоны (+ web/services: агрегаты дашборда)
 ├── tests/                   # pytest
@@ -99,6 +106,7 @@ python3 -m venv .venv
 
 ## Документация
 
+- **[docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md)** — **объём продукта** по сопоставлению: кандидаты vs exact-ключи, ревью, формулировки для тезисов/ВКР.
 - **[VKR_AND_PRACTICE_REPORT.md](VKR_AND_PRACTICE_REPORT.md)** — структура ВКР и отчёта по практике (главы 1–3).
 - **[README_REPORT.md](README_REPORT.md)** — пояснительная записка с диаграммами (актуализируйте под веб/ИИ при сдаче).
 - **[docs/REFACTOR_NOTES.md](docs/REFACTOR_NOTES.md)** — изменения в структуре кода и гигиене репозитория.

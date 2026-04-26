@@ -60,3 +60,30 @@ def find_cross_shop_pairs(
 
     pairs.sort(key=lambda x: x.score, reverse=True)
     return pairs[:max_pairs]
+
+
+def filter_greedy_one_to_one(pairs: list[MatchPair]) -> list[MatchPair]:
+    """Keep a non-overlapping set: each index from A and B used at most once, by descending score.
+
+    Reduces duplicate candidates when many titles in one shop are similar to the same item
+    in the other (no one-to-one assignment in the raw cosine matrix).
+
+    Args:
+        pairs: Candidate pairs, typically from ``find_cross_shop_pairs`` (sorted by score).
+
+    Returns:
+        Pairs that form a greedy maximum matching in score order.
+    """
+    if not pairs:
+        return []
+    ordered = sorted(pairs, key=lambda p: p.score, reverse=True)
+    used_a: set[int] = set()
+    used_b: set[int] = set()
+    out: list[MatchPair] = []
+    for p in ordered:
+        if p.idx_a in used_a or p.idx_b in used_b:
+            continue
+        out.append(p)
+        used_a.add(p.idx_a)
+        used_b.add(p.idx_b)
+    return out

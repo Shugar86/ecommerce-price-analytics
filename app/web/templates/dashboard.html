@@ -14,8 +14,12 @@
         <div class="stat">{{ anomalies_n }}</div>
     </div>
     <div class="card">
-        <div class="muted">Сопоставлений TF-IDF</div>
-        <div class="stat">{{ matches_n }}</div>
+        <div class="muted">Кандидатов (TF‑IDF, EKF↔TDM)</div>
+        <div class="stat">{{ matches_suggested_n }}</div>
+    </div>
+    <div class="card">
+        <div class="muted">Подтверждённых пар (ревью)</div>
+        <div class="stat">{{ matches_confirmed_n }}</div>
     </div>
     <div class="card">
         <div class="muted">Цена (руб.) min / max / средн.</div>
@@ -40,6 +44,68 @@
     {% endif %}
     {% if last_update %}
     <p class="muted" style="margin-bottom:0;">Последнее обновление товаров: {{ last_update }} UTC</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 style="margin-top:0;font-size:1rem;">Полнота идентификаторов по источникам</h2>
+    <p class="muted" style="margin-top:0;">Доля строк с штрихкодом, артикулом, category_id, name_norm (для оценки пригодности exact-сопоставления).</p>
+    {% if shop_completeness %}
+    <table>
+        <thead>
+            <tr>
+                <th>Источник</th>
+                <th>Всего</th>
+                <th>Штрихкод</th>
+                <th>Артикул</th>
+                <th>category_id</th>
+                <th>name_norm</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in shop_completeness %}
+            <tr>
+                <td>{{ r.source_shop }}</td>
+                <td>{{ r.total }}</td>
+                <td>{{ r.pct(r.with_barcode) }}% ({{ r.with_barcode }})</td>
+                <td>{{ r.pct(r.with_vendor_code) }}% ({{ r.with_vendor_code }})</td>
+                <td>{{ r.pct(r.with_category_id) }}% ({{ r.with_category_id }})</td>
+                <td>{{ r.pct(r.with_name_norm) }}% ({{ r.with_name_norm }})</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Нет данных.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2 style="margin-top:0;font-size:1rem;">Пересечения exact-ключей между парами магазинов</h2>
+    <p class="muted" style="margin-top:0;">Число общих непустых значений по полю (как в ``python -m app.overlap_report``). Высокий пересчёт по barcode — сильный сигнал; name_norm — только если наименования согласованы между фидами.</p>
+    {% if key_overlaps %}
+    <table>
+        <thead>
+            <tr>
+                <th>Магазин A</th>
+                <th>Магазин B</th>
+                <th>Поле</th>
+                <th>Общих</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for o in key_overlaps %}
+            <tr>
+                <td>{{ o.shop_a }}</td>
+                <td>{{ o.shop_b }}</td>
+                <td>{{ o.field }}</td>
+                <td>{{ o.overlap_count }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Нет пар для сравнения (загрузите collector).</p>
     {% endif %}
 </div>
 

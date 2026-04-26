@@ -171,9 +171,24 @@ class PriceAnomaly(Base):
     price_at_detection: Mapped[float] = mapped_column(Float, nullable=False)
 
 
+# --- Product match governance (see docs/PRODUCT_SCOPE.md) ---
+
+# How the link was produced: automatic fuzzy vs future exact keys.
+MATCH_KIND_FUZZY_TFIDF = "fuzzy_tfidf"
+MATCH_KIND_EXACT_BARCODE = "exact_barcode"
+MATCH_KIND_EXACT_VENDOR = "exact_vendor"
+MATCH_KIND_EXACT_NAME_NORM = "exact_name_norm"
+
+# Workflow: ML/heuristic output is "suggested" until reviewed in the web UI.
+MATCH_STATUS_SUGGESTED = "suggested"
+MATCH_STATUS_CONFIRMED = "confirmed"
+MATCH_STATUS_REJECTED = "rejected"
+
+
 class ProductMatch(Base):
     """
-    Пара сопоставленных товаров из разных источников (NLP / TF-IDF).
+    Пара сопоставленных товаров: кандидат по сходству наименований или
+    подтверждённый/отклонённый аналитиком веб-интерфейса.
 
     Идентификаторы product_low_id и product_high_id упорядочены (low < high).
     """
@@ -196,6 +211,12 @@ class ProductMatch(Base):
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
     method: Mapped[str] = mapped_column(String(64), nullable=False)
+    match_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=MATCH_KIND_FUZZY_TFIDF
+    )
+    match_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=MATCH_STATUS_SUGGESTED
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
     )
