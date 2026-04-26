@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from io import BytesIO
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from lxml import etree
@@ -144,6 +144,435 @@ def _fetch_yml_stream(url: str, *, timeout: tuple[int, int] = (10, 180)) -> requ
     return response
 
 
+def _clear_parsed_offer(offer_elem: etree._Element) -> None:
+    """Освобождает память после iterparse: clear + удаление соседей слева."""
+    offer_elem.clear()
+    while offer_elem.getprevious() is not None:
+        del offer_elem.getparent()[0]
+
+
+def _apply_product_upsert(
+    session: Any,
+    stmt: Any,
+    *,
+    external_id: str,
+    source_shop: str,
+) -> None:
+    """INSERT .. ON CONFLICT для Product и запись в историю цен."""
+    session.execute(stmt)
+    record_price_change(session, external_id=external_id, source_shop=source_shop)
+
+
+def _product_upsert_stmt_ekf(
+    *,
+    external_id: str,
+    name: str,
+    price_value: float,
+    currency: str,
+    price_in_rub: float,
+    url: Optional[str],
+    barcode: Optional[str],
+    vendor_code: Optional[str],
+    category_id: Optional[str],
+) -> Any:
+    ccy = currency if len(currency) == 3 else "RUR"
+    return insert(Product).values(
+        external_id=external_id,
+        name=name,
+        name_norm=normalize_name_for_search(name),
+        price_original=price_value,
+        currency=ccy,
+        price_in_rub=price_in_rub,
+        source_shop="EKF",
+        url=url,
+        barcode=barcode,
+        vendor_code=vendor_code,
+        category_id=category_id,
+        updated_at=datetime.utcnow(),
+    ).on_conflict_do_update(
+        index_elements=["external_id"],
+        set_={
+            "name": name,
+            "name_norm": normalize_name_for_search(name),
+            "price_original": price_value,
+            "currency": ccy,
+            "price_in_rub": price_in_rub,
+            "url": url,
+            "barcode": barcode,
+            "vendor_code": vendor_code,
+            "category_id": category_id,
+            "updated_at": datetime.utcnow(),
+        },
+    )
+
+
+def _product_upsert_stmt_tdm(
+    *,
+    external_id: str,
+    name: str,
+    price_rub: float,
+    barcode: Optional[str],
+    vendor_code: Optional[str],
+) -> Any:
+    return insert(Product).values(
+        external_id=external_id,
+        name=name,
+        name_norm=normalize_name_for_search(name),
+        price_original=price_rub,
+        currency="RUB",
+        price_in_rub=price_rub,
+        source_shop="TDM Electric",
+        url=None,
+        barcode=barcode,
+        vendor_code=vendor_code,
+        category_id=None,
+        updated_at=datetime.utcnow(),
+    ).on_conflict_do_update(
+        index_elements=["external_id"],
+        set_={
+            "name": name,
+            "name_norm": normalize_name_for_search(name),
+            "price_original": price_rub,
+            "price_in_rub": price_rub,
+            "barcode": barcode,
+            "vendor_code": vendor_code,
+            "updated_at": datetime.utcnow(),
+        },
+    )
+
+
+def _product_upsert_stmt_fakestore(
+    *,
+    external_id: str,
+    title: str,
+    price_usd: float,
+    price_rub: float,
+    product_id: object,
+) -> Any:
+    return insert(Product).values(
+        external_id=external_id,
+        name=title,
+        name_norm=normalize_name_for_search(title),
+        price_original=price_usd,
+        currency="USD",
+        price_in_rub=price_rub,
+        source_shop="FakeStore",
+        url=f"https://fakestoreapi.com/products/{product_id}",
+        updated_at=datetime.utcnow(),
+    ).on_conflict_do_update(
+        index_elements=["external_id"],
+        set_={
+            "name": title,
+            "name_norm": normalize_name_for_search(title),
+            "price_original": price_usd,
+            "price_in_rub": price_rub,
+            "updated_at": datetime.utcnow(),
+        },
+    )
+
+
+def _product_upsert_stmt_tbm(
+    *,
+    external_id: str,
+    name: str,
+    price_rub: float,
+    url: Optional[str],
+    barcode: Optional[str],
+    vendor_code: Optional[str],
+    category_id: Optional[str],
+) -> Any:
+    return insert(Product).values(
+        external_id=external_id,
+        name=name,
+        name_norm=normalize_name_for_search(name),
+        price_original=price_rub,
+        currency="RUB",
+        price_in_rub=price_rub,
+        source_shop="TBM Market",
+        url=url,
+        barcode=barcode,
+        vendor_code=vendor_code,
+        category_id=category_id,
+        updated_at=datetime.utcnow(),
+    ).on_conflict_do_update(
+        index_elements=["external_id"],
+        set_={
+            "name": name,
+            "name_norm": normalize_name_for_search(name),
+            "price_original": price_rub,
+            "price_in_rub": price_rub,
+            "barcode": barcode,
+            "vendor_code": vendor_code,
+            "category_id": category_id,
+            "updated_at": datetime.utcnow(),
+        },
+    )
+
+
+def _product_upsert_stmt_galacentre(
+    *,
+    external_id: str,
+    name: str,
+    price_rub: float,
+    url: Optional[str],
+    barcode: Optional[str],
+    vendor_code: Optional[str],
+    category_id: Optional[str],
+) -> Any:
+    return insert(Product).values(
+        external_id=external_id,
+        name=name,
+        name_norm=normalize_name_for_search(name),
+        price_original=price_rub,
+        currency="RUB",
+        price_in_rub=price_rub,
+        source_shop="GalaCentre",
+        url=url,
+        barcode=barcode,
+        vendor_code=vendor_code,
+        category_id=category_id,
+        updated_at=datetime.utcnow(),
+    ).on_conflict_do_update(
+        index_elements=["external_id"],
+        set_={
+            "name": name,
+            "name_norm": normalize_name_for_search(name),
+            "price_original": price_rub,
+            "price_in_rub": price_rub,
+            "barcode": barcode,
+            "vendor_code": vendor_code,
+            "category_id": category_id,
+            "updated_at": datetime.utcnow(),
+        },
+    )
+
+
+def _ekf_row_from_offer(
+    offer_elem: etree._Element, offer_id: str
+) -> Optional[dict[str, Any]]:
+    """
+    Извлекает поля EKF из <offer> или None, если offer следует пропустить
+    (аналог `continue` в цикле).
+    """
+    price_text = offer_elem.findtext("price")
+    url = offer_elem.findtext("url")
+    category_id = offer_elem.findtext("categoryId")
+    currency = (offer_elem.findtext("currencyId") or "RUR").strip().upper()
+
+    if not price_text:
+        return None
+
+    price_value = _parse_price_ru(price_text)
+
+    vendor_code = (
+        offer_elem.findtext("vendorCode")
+        or _extract_param(offer_elem, "Артикул")
+        or _extract_param(offer_elem, "Код")
+        or offer_elem.findtext("model")
+    )
+    vendor_code = _normalize_vendor_code(vendor_code)
+    barcode = _first_barcode(offer_elem.findtext("barcode"))
+
+    name = (offer_elem.findtext("name") or "").strip()
+    if not name:
+        name = _name_from_url_slug(url) or vendor_code or f"EKF offer {offer_id}"
+
+    if currency in ("RUR", "RUB"):
+        price_in_rub = price_value
+    else:
+        price_in_rub = price_value
+
+    return {
+        "name": name,
+        "price_value": price_value,
+        "currency": currency,
+        "price_in_rub": price_in_rub,
+        "url": url,
+        "barcode": barcode,
+        "vendor_code": vendor_code,
+        "category_id": category_id,
+    }
+
+
+def _tbm_row_from_offer(offer_elem: etree._Element) -> Optional[dict[str, Any]]:
+    """Поля TBM Market из <offer> или None, если offer следует пропустить."""
+    name_elem = offer_elem.find("name")
+    price_elem = offer_elem.find("price")
+    url_elem = offer_elem.find("url")
+
+    if name_elem is None or price_elem is None:
+        return None
+
+    name = (name_elem.text or "").strip()
+    price_rub = _parse_price_ru(price_elem.text)
+    url = url_elem.text if url_elem is not None else None
+    category_id = offer_elem.findtext("categoryId")
+    barcode = _first_barcode(offer_elem.findtext("barcode"))
+    vendor_code = offer_elem.findtext("vendorCode") or _extract_param(
+        offer_elem, "Артикул"
+    )
+    return {
+        "name": name,
+        "price_rub": price_rub,
+        "url": url,
+        "barcode": barcode,
+        "vendor_code": vendor_code,
+        "category_id": category_id,
+    }
+
+
+def _galacentre_row_from_offer(offer_elem: etree._Element) -> Optional[dict[str, Any]]:
+    """Поля GalaCentre из <offer> или None, если offer следует пропустить."""
+    name = (offer_elem.findtext("name") or "").strip()
+    price_text = offer_elem.findtext("price")
+    url = offer_elem.findtext("url")
+    category_id = offer_elem.findtext("categoryId")
+
+    if not name or not price_text:
+        return None
+
+    price_rub = _parse_price_ru(price_text)
+    barcode = _first_barcode(offer_elem.findtext("barcode"))
+    vendor_code = _extract_param(offer_elem, "Артикул") or offer_elem.findtext("model")
+    return {
+        "name": name,
+        "price_rub": price_rub,
+        "url": url,
+        "barcode": barcode,
+        "vendor_code": vendor_code,
+        "category_id": category_id,
+    }
+
+
+def _tdm_find_header_row(sheet: Any) -> tuple[Optional[int], dict[str, int]]:
+    """Первая строка заголовков (первые 50 строк) и карта {lower_header: col_index}."""
+    header_row_idx: Optional[int] = None
+    header_map: dict[str, int] = {}
+    for r in range(min(50, sheet.nrows)):
+        row = [str(sheet.cell_value(r, c)).strip() for c in range(sheet.ncols)]
+        joined = " ".join(x.lower() for x in row if x)
+        if any(
+            k in joined
+            for k in ("артик", "наимен", "цена", "штрих", "barcode", "ean", "код")
+        ):
+            for c, v in enumerate(row):
+                key = v.strip().lower()
+                if key:
+                    header_map[key] = c
+            header_row_idx = r
+            break
+    return header_row_idx, header_map
+
+
+def _tdm_map_columns(
+    header_map: dict[str, int],
+) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+    """Сопоставляет стандартные поля TDM с колонками по подстрокам в заголовке."""
+
+    def _find_col(*needles: str) -> Optional[int]:
+        for k, idx in header_map.items():
+            for n in needles:
+                if n in k:
+                    return idx
+        return None
+
+    col_name = _find_col("наимен", "товар", "номенклат", "product", "name")
+    col_price = _find_col("цена", "price")
+    col_vendor = _find_col("артик", "код", "sku", "vendor", "арт.")
+    col_barcode = _find_col("штрих", "barcode", "ean", "gtin")
+    return col_name, col_price, col_vendor, col_barcode
+
+
+def _tdm_guess_barcode_column(
+    sheet: Any,
+    header_row_idx: int,
+    col_name: int,
+    col_price: int,
+    col_barcode: Optional[int],
+) -> Optional[int]:
+    """Если колонка штрихкода не найдена по заголовку — эвристика по данным (как раньше)."""
+    if col_barcode is not None:
+        return col_barcode
+
+    sample_rows = min(3000, max(0, sheet.nrows - (header_row_idx + 1)))
+    best_col: Optional[int] = None
+    best_hits = 0
+    for c in range(sheet.ncols):
+        if c in (col_name, col_price):
+            continue
+        hits = 0
+        for r in range(
+            header_row_idx + 1, min(sheet.nrows, header_row_idx + 1 + sample_rows)
+        ):
+            v = sheet.cell_value(r, c)
+            if v in (None, ""):
+                continue
+            s = str(v).strip()
+            if _first_barcode(s):
+                hits += 1
+        if hits > best_hits:
+            best_hits = hits
+            best_col = c
+    if best_col is not None and best_hits >= 50:
+        logger.info(
+            f"🔎 TDM: обнаружена колонка со штрихкодами по данным: col={best_col}, hits={best_hits}"
+        )
+        return best_col
+    return col_barcode
+
+
+def _tdm_try_process_xls_row(
+    session: Any,
+    sheet: Any,
+    r: int,
+    col_name: int,
+    col_price: int,
+    col_vendor: Optional[int],
+    col_barcode: Optional[int],
+) -> bool:
+    """
+    Парсит и upsert'ит одну строку TDM. True — если строка сохранена; False — пропуск.
+    """
+    name = str(sheet.cell_value(r, col_name)).strip()
+    if not name or name.lower() in ("nan", "none"):
+        return False
+
+    raw_price = sheet.cell_value(r, col_price)
+    if raw_price in (None, ""):
+        return False
+
+    if isinstance(raw_price, (int, float)):
+        price_rub = float(raw_price)
+    else:
+        price_rub = _parse_price_ru(str(raw_price))
+
+    vendor_code = None
+    if col_vendor is not None:
+        vendor_code = _normalize_vendor_code(str(sheet.cell_value(r, col_vendor)))
+    if not vendor_code:
+        vendor_code = _guess_vendor_code(name)
+
+    barcode = None
+    if col_barcode is not None:
+        barcode = _first_barcode(str(sheet.cell_value(r, col_barcode)))
+
+    external_id = f"tdm_{vendor_code or r}"
+    stmt = _product_upsert_stmt_tdm(
+        external_id=external_id,
+        name=name,
+        price_rub=price_rub,
+        barcode=barcode,
+        vendor_code=vendor_code,
+    )
+    _apply_product_upsert(
+        session,
+        stmt,
+        external_id=external_id,
+        source_shop="TDM Electric",
+    )
+    return True
+
+
 def fetch_ekf_goods(session) -> None:
     """
     Получает товары из EKF (YML/XML), фид лежит в YandexCloud.
@@ -173,78 +602,31 @@ def fetch_ekf_goods(session) -> None:
                 if not offer_id:
                     continue
 
-                price_text = offer_elem.findtext("price")
-                url = offer_elem.findtext("url")
-                category_id = offer_elem.findtext("categoryId")
-                currency = (offer_elem.findtext("currencyId") or "RUR").strip().upper()
-
-                if not price_text:
+                row = _ekf_row_from_offer(offer_elem, offer_id)
+                if not row:
                     continue
 
-                price_value = _parse_price_ru(price_text)
-
-                # EKF часто даёт vendorCode/param Артикул/похожие поля.
-                vendor_code = (
-                    offer_elem.findtext("vendorCode")
-                    or _extract_param(offer_elem, "Артикул")
-                    or _extract_param(offer_elem, "Код")
-                    or offer_elem.findtext("model")
-                )
-                vendor_code = _normalize_vendor_code(vendor_code)
-                barcode = _first_barcode(offer_elem.findtext("barcode"))
-
-                # В EKF фиде часто нет <name>/<model>/<typePrefix>. Тогда делаем "читаемое имя" из URL.
-                name = (offer_elem.findtext("name") or "").strip()
-                if not name:
-                    name = _name_from_url_slug(url) or vendor_code or f"EKF offer {offer_id}"
-
-                # В этом фиде валюты разные; считаем price_in_rub только если RUR/RUB.
-                if currency in ("RUR", "RUB"):
-                    price_in_rub = price_value
-                else:
-                    # Без курсов по всем валютам: сохраняем как есть, но помечаем.
-                    price_in_rub = price_value
-
                 external_id = f"ekf_{offer_id}"
-                stmt = insert(Product).values(
+                stmt = _product_upsert_stmt_ekf(
                     external_id=external_id,
-                    name=name,
-                    name_norm=normalize_name_for_search(name),
-                    price_original=price_value,
-                    currency=currency if len(currency) == 3 else "RUR",
-                    price_in_rub=price_in_rub,
-                    source_shop="EKF",
-                    url=url,
-                    barcode=barcode,
-                    vendor_code=vendor_code,
-                    category_id=category_id,
-                    updated_at=datetime.utcnow(),
-                ).on_conflict_do_update(
-                    index_elements=["external_id"],
-                    set_={
-                        "name": name,
-                        "name_norm": normalize_name_for_search(name),
-                        "price_original": price_value,
-                        "currency": currency if len(currency) == 3 else "RUR",
-                        "price_in_rub": price_in_rub,
-                        "url": url,
-                        "barcode": barcode,
-                        "vendor_code": vendor_code,
-                        "category_id": category_id,
-                        "updated_at": datetime.utcnow(),
-                    },
+                    name=row["name"],
+                    price_value=row["price_value"],
+                    currency=row["currency"],
+                    price_in_rub=row["price_in_rub"],
+                    url=row["url"],
+                    barcode=row["barcode"],
+                    vendor_code=row["vendor_code"],
+                    category_id=row["category_id"],
                 )
-
-                session.execute(stmt)
-                record_price_change(session, external_id=external_id, source_shop="EKF")
+                _apply_product_upsert(
+                    session, stmt, external_id=external_id, source_shop="EKF"
+                )
                 saved_count += 1
 
             except (ValueError, TypeError, AttributeError) as e:
                 logger.warning(f"⚠️ Ошибка обработки товара EKF {offer_id}: {e}")
             finally:
-                offer_elem.clear()
-                while offer_elem.getprevious() is not None:
-                    del offer_elem.getparent()[0]
+                _clear_parsed_offer(offer_elem)
 
         del context
         session.commit()
@@ -285,35 +667,12 @@ def fetch_tdm_goods_from_xls(session) -> None:
         book = xlrd.open_workbook(file_contents=response.content)
         sheet = book.sheet_by_index(0)
 
-        # Ищем строку заголовков в первых 50 строках.
-        header_row_idx: Optional[int] = None
-        header_map: dict[str, int] = {}
-        for r in range(min(50, sheet.nrows)):
-            row = [str(sheet.cell_value(r, c)).strip() for c in range(sheet.ncols)]
-            joined = " ".join(x.lower() for x in row if x)
-            if any(k in joined for k in ("артик", "наимен", "цена", "штрих", "barcode", "ean", "код")):
-                for c, v in enumerate(row):
-                    key = v.strip().lower()
-                    if key:
-                        header_map[key] = c
-                header_row_idx = r
-                break
-
+        header_row_idx, header_map = _tdm_find_header_row(sheet)
         if header_row_idx is None:
             logger.error("❌ Не удалось найти строку заголовков в XLS TDM (первые 50 строк).")
             return
 
-        def _find_col(*needles: str) -> Optional[int]:
-            for k, idx in header_map.items():
-                for n in needles:
-                    if n in k:
-                        return idx
-            return None
-
-        col_name = _find_col("наимен", "товар", "номенклат", "product", "name")
-        col_price = _find_col("цена", "price")
-        col_vendor = _find_col("артик", "код", "sku", "vendor", "арт.")
-        col_barcode = _find_col("штрих", "barcode", "ean", "gtin")
+        col_name, col_price, col_vendor, col_barcode = _tdm_map_columns(header_map)
 
         if col_name is None or col_price is None:
             logger.error(
@@ -322,91 +681,23 @@ def fetch_tdm_goods_from_xls(session) -> None:
             )
             return
 
-        # If barcode column was not detected by header, try to guess it by scanning values.
-        if col_barcode is None:
-            sample_rows = min(3000, max(0, sheet.nrows - (header_row_idx + 1)))
-            best_col = None
-            best_hits = 0
-            # scan all columns and count barcode-like hits
-            for c in range(sheet.ncols):
-                if c in (col_name, col_price):
-                    continue
-                hits = 0
-                checked = 0
-                for r in range(header_row_idx + 1, min(sheet.nrows, header_row_idx + 1 + sample_rows)):
-                    v = sheet.cell_value(r, c)
-                    if v in (None, ""):
-                        continue
-                    checked += 1
-                    s = str(v).strip()
-                    if _first_barcode(s):
-                        hits += 1
-                if hits > best_hits:
-                    best_hits = hits
-                    best_col = c
-            # accept if enough hits (avoid random numeric columns)
-            if best_col is not None and best_hits >= 50:
-                col_barcode = best_col
-                logger.info(f"🔎 TDM: обнаружена колонка со штрихкодами по данным: col={col_barcode}, hits={best_hits}")
+        col_barcode = _tdm_guess_barcode_column(
+            sheet, header_row_idx, col_name, col_price, col_barcode
+        )
 
         saved = 0
         for r in range(header_row_idx + 1, sheet.nrows):
             try:
-                name = str(sheet.cell_value(r, col_name)).strip()
-                if not name or name.lower() in ("nan", "none"):
-                    continue
-
-                raw_price = sheet.cell_value(r, col_price)
-                if raw_price in (None, ""):
-                    continue
-
-                # xlrd может дать float или строку
-                if isinstance(raw_price, (int, float)):
-                    price_rub = float(raw_price)
-                else:
-                    price_rub = _parse_price_ru(str(raw_price))
-
-                vendor_code = None
-                if col_vendor is not None:
-                    vendor_code = _normalize_vendor_code(str(sheet.cell_value(r, col_vendor)))
-                if not vendor_code:
-                    vendor_code = _guess_vendor_code(name)
-
-                barcode = None
-                if col_barcode is not None:
-                    barcode = _first_barcode(str(sheet.cell_value(r, col_barcode)))
-
-                # Внешний id — по строке и vendor_code если есть.
-                external_id = f"tdm_{vendor_code or r}"
-                stmt = insert(Product).values(
-                    external_id=external_id,
-                    name=name,
-                    name_norm=normalize_name_for_search(name),
-                    price_original=price_rub,
-                    currency="RUB",
-                    price_in_rub=price_rub,
-                    source_shop="TDM Electric",
-                    url=None,
-                    barcode=barcode,
-                    vendor_code=vendor_code,
-                    category_id=None,
-                    updated_at=datetime.utcnow(),
-                ).on_conflict_do_update(
-                    index_elements=["external_id"],
-                    set_={
-                        "name": name,
-                        "name_norm": normalize_name_for_search(name),
-                        "price_original": price_rub,
-                        "price_in_rub": price_rub,
-                        "barcode": barcode,
-                        "vendor_code": vendor_code,
-                        "updated_at": datetime.utcnow(),
-                    },
-                )
-                session.execute(stmt)
-                record_price_change(session, external_id=external_id, source_shop="TDM Electric")
-                saved += 1
-
+                if _tdm_try_process_xls_row(
+                    session,
+                    sheet,
+                    r,
+                    col_name,
+                    col_price,
+                    col_vendor,
+                    col_barcode,
+                ):
+                    saved += 1
             except (ValueError, TypeError) as e:
                 logger.warning(f"⚠️ Ошибка обработки строки XLS TDM #{r}: {e}")
 
@@ -546,31 +837,19 @@ def fetch_foreign_goods(session) -> None:
                 
                 # Формирование уникального external_id
                 external_id = f"fakestore_{product_id}"
-                
-                # UPSERT товара
-                stmt = insert(Product).values(
+                stmt = _product_upsert_stmt_fakestore(
                     external_id=external_id,
-                    name=title,
-                    name_norm=normalize_name_for_search(title),
-                    price_original=price_usd,
-                    currency='USD',
-                    price_in_rub=price_rub,
-                    source_shop='FakeStore',
-                    url=f"https://fakestoreapi.com/products/{product_id}",
-                    updated_at=datetime.utcnow()
-                ).on_conflict_do_update(
-                    index_elements=['external_id'],
-                    set_={
-                        'name': title,
-                        'name_norm': normalize_name_for_search(title),
-                        'price_original': price_usd,
-                        'price_in_rub': price_rub,
-                        'updated_at': datetime.utcnow()
-                    }
+                    title=title,
+                    price_usd=price_usd,
+                    price_rub=price_rub,
+                    product_id=product_id,
                 )
-                
-                session.execute(stmt)
-                record_price_change(session, external_id=external_id, source_shop="FakeStore")
+                _apply_product_upsert(
+                    session,
+                    stmt,
+                    external_id=external_id,
+                    source_shop="FakeStore",
+                )
                 saved_count += 1
                 
             except (KeyError, ValueError, TypeError) as e:
@@ -630,61 +909,32 @@ def fetch_russian_goods(session) -> None:
                 
                 if not offer_id:
                     continue
-                
-                # Извлечение данных из дочерних элементов
-                name_elem = offer_elem.find('name')
-                price_elem = offer_elem.find('price')
-                url_elem = offer_elem.find('url')
-                
-                if name_elem is None or price_elem is None:
+
+                row = _tbm_row_from_offer(offer_elem)
+                if not row:
                     continue
-                
-                name = (name_elem.text or "").strip()
-                price_rub = _parse_price_ru(price_elem.text)
-                url = url_elem.text if url_elem is not None else None
-                category_id = offer_elem.findtext("categoryId")
-                barcode = _first_barcode(offer_elem.findtext("barcode"))
-                vendor_code = offer_elem.findtext("vendorCode") or _extract_param(offer_elem, "Артикул")
                 
                 # Формирование уникального external_id
                 external_id = f"tbm_{offer_id}"
-                
-                # UPSERT товара (российские цены уже в рублях)
-                stmt = insert(Product).values(
+                stmt = _product_upsert_stmt_tbm(
                     external_id=external_id,
-                    name=name,
-                    name_norm=normalize_name_for_search(name),
-                    price_original=price_rub,
-                    currency='RUB',
-                    price_in_rub=price_rub,
-                    source_shop='TBM Market',
-                    url=url,
-                    barcode=barcode,
-                    vendor_code=vendor_code,
-                    category_id=category_id,
-                    updated_at=datetime.utcnow()
-                ).on_conflict_do_update(
-                    index_elements=['external_id'],
-                    set_={
-                        'name': name,
-                        'name_norm': normalize_name_for_search(name),
-                        'price_original': price_rub,
-                        'price_in_rub': price_rub,
-                        'barcode': barcode,
-                        'vendor_code': vendor_code,
-                        'category_id': category_id,
-                        'updated_at': datetime.utcnow()
-                    }
+                    name=row["name"],
+                    price_rub=row["price_rub"],
+                    url=row["url"],
+                    barcode=row["barcode"],
+                    vendor_code=row["vendor_code"],
+                    category_id=row["category_id"],
                 )
-                
-                session.execute(stmt)
-                record_price_change(session, external_id=external_id, source_shop="TBM Market")
+                _apply_product_upsert(
+                    session,
+                    stmt,
+                    external_id=external_id,
+                    source_shop="TBM Market",
+                )
                 saved_count += 1
-                
+
                 # Очистка элемента из памяти (важно для streaming)
-                offer_elem.clear()
-                while offer_elem.getprevious() is not None:
-                    del offer_elem.getparent()[0]
+                _clear_parsed_offer(offer_elem)
                 
             except (ValueError, TypeError, AttributeError) as e:
                 logger.warning(f"⚠️ Ошибка обработки товара {offer_id}: {e}")
@@ -754,51 +1004,26 @@ def fetch_galacentre_goods(session) -> None:
                         if not offer_id:
                             continue
 
-                        name = (offer_elem.findtext("name") or "").strip()
-                        price_text = offer_elem.findtext("price")
-                        url = offer_elem.findtext("url")
-                        category_id = offer_elem.findtext("categoryId")
-
-                        if not name or not price_text:
+                        row = _galacentre_row_from_offer(offer_elem)
+                        if not row:
                             continue
 
-                        price_rub = _parse_price_ru(price_text)
-                        barcode = _first_barcode(offer_elem.findtext("barcode"))
-
-                        # В YML Гала-Центра артикул часто лежит в param name="Артикул"
-                        vendor_code = _extract_param(offer_elem, "Артикул") or offer_elem.findtext("model")
-
                         external_id = f"galacentre_{offer_id}"
-
-                        stmt = insert(Product).values(
+                        stmt = _product_upsert_stmt_galacentre(
                             external_id=external_id,
-                            name=name,
-                            name_norm=normalize_name_for_search(name),
-                            price_original=price_rub,
-                            currency="RUB",
-                            price_in_rub=price_rub,
-                            source_shop="GalaCentre",
-                            url=url,
-                            barcode=barcode,
-                            vendor_code=vendor_code,
-                            category_id=category_id,
-                            updated_at=datetime.utcnow(),
-                        ).on_conflict_do_update(
-                            index_elements=["external_id"],
-                            set_={
-                                "name": name,
-                                "name_norm": normalize_name_for_search(name),
-                                "price_original": price_rub,
-                                "price_in_rub": price_rub,
-                                "barcode": barcode,
-                                "vendor_code": vendor_code,
-                                "category_id": category_id,
-                                "updated_at": datetime.utcnow(),
-                            },
+                            name=row["name"],
+                            price_rub=row["price_rub"],
+                            url=row["url"],
+                            barcode=row["barcode"],
+                            vendor_code=row["vendor_code"],
+                            category_id=row["category_id"],
                         )
-
-                        session.execute(stmt)
-                        record_price_change(session, external_id=external_id, source_shop="GalaCentre")
+                        _apply_product_upsert(
+                            session,
+                            stmt,
+                            external_id=external_id,
+                            source_shop="GalaCentre",
+                        )
                         pending_writes += 1
                         saved_count += 1
 
@@ -810,9 +1035,7 @@ def fetch_galacentre_goods(session) -> None:
                     except (ValueError, TypeError, AttributeError) as e:
                         logger.warning(f"⚠️ Ошибка обработки товара GalaCentre {offer_id}: {e}")
                     finally:
-                        offer_elem.clear()
-                        while offer_elem.getprevious() is not None:
-                            del offer_elem.getparent()[0]
+                        _clear_parsed_offer(offer_elem)
 
                 del context
                 if pending_writes:
