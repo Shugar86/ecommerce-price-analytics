@@ -1,0 +1,5 @@
+id,source_name,name,brand,vendor_code,barcode,price_rub,loaded_at
+1,carreta_nsk_opt,Клемма WAGO 221-412 3-пров,WAGO,W221,,450.50,2026-05-06T09:00:00
+2,carreta_nsk_retail,WAGO Клемма 221-412 три проводника,WAGO,W221,,520.00,2026-05-06T09:00:00
+3,carreta_nsk_opt,РОЛИК приводной 3RG тип Х,3RG,G137,,1890.00,2026-05-06T09:00:00
+4,carreta_nsk_retail,Ролик обводной (XSS1) 3RG,3RG,G137,,1990.00,2026-05-06T09:00:00

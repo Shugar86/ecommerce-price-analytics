@@ -1,0 +1,61 @@
+# docker-compose.loadtest.yml
+# Override-файл для нагрузочного тестирования балансировщика.
+# Запуск: docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d
+# Останов: docker compose -f docker-compose.yml -f docker-compose.loadtest.yml down
+#
+# Добавляет:
+#   - nginx как L7-балансировщик на порту 8080
+#   - web1 и web2 — две независимые реплики FastAPI
+# Основной контейнер prices_web продолжает работать на 8010.
+
+version: "3.9"
+
+services:
+  # Реплика 1 FastAPI (идентична основному web, но без published port)
+  web1:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    command: uvicorn app.web.main:app --host 0.0.0.0 --port 8000 --workers 2
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      INSTANCE_NAME: "web-replica-1"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - prices_network
+    restart: unless-stopped
+
+  # Реплика 2 FastAPI (второй экземпляр за балансировщиком)
+  web2:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    command: uvicorn app.web.main:app --host 0.0.0.0 --port 8000 --workers 2
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      INSTANCE_NAME: "web-replica-2"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - prices_network
+    restart: unless-stopped
+
+  # nginx как балансировщик нагрузки (L7, round-robin)
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: prices_nginx_lb
+    ports:
+      - "8082:80"   # Публичный порт для нагрузочного тестирования (8080, 8081 заняты)
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web1
+      - web2
+    networks:
+      - prices_network
+    restart: unless-stopped

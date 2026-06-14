@@ -1,0 +1,15 @@
+{
+  "generated_at_utc": "2026-05-06T09:00:00+00:00",
+  "sources_requested": ["carreta_nsk_opt", "carreta_nsk_retail"],
+  "funnel": {
+    "stages": [
+      { "name": "Экспорт офферов (строки)", "value": 4 },
+      { "name": "Коды в обоих CARRETA (опт∩розница)", "value": 2 },
+      {
+        "name": "Уникальные бренды (пример KPI)",
+        "value": 2
+      }
+    ]
+  },
+  "notes": "Fixture for pytest only."
+}

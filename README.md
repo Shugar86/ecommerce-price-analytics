@@ -1,18 +1,40 @@
-# Микросервисное приложение сбора и визуального анализа цен (e-commerce)
+# Price Intelligence для B2B-прайсов
 
-Проект подходит для **ВКР / отчёта по практике**: микросервисная архитектура (Docker), **веб-приложение аналитика** (основной интерфейс), **сборщик** с нормализованным слоем `normalized_offers` и **price intelligence** (рынок, индекс цены, floor-маржа), **воркер аналитики** (аномалии цен, **кандидаты** наименований по TF‑IDF EKF↔TDM, простой прогноз), Telegram-бот (дополнительный канал).
+> Аналитика цен, которая не кричит, а показывает цифры: собирает прайсы, строит историю и помогает принимать решения на основе данных, а не интуиции.
 
-**Сопоставление товаров между магазинами** в репозитории реализовано как **подсказки по сходству названий** и **точные пересечения ключей** (дашборд: полнота полей и overlap по `barcode` / `vendor_code` / `name_norm`), с возможностью **подтвердить или отклонить** кандидат в веб-интерфейсе. Это **не** система гарантированного глобального сопоставления каталогов; см. **[docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md)**.
+Это микросервисное приложение для сбора и визуального анализа цен в электротехническом B2B-сегменте. Оно объединяет фиды поставщиков (EKF, TDM Electric, Комплект-Сервис, Syperopt и др.), нормализует офферы, считает рыночные KPI и даёт аналитику **кандидатов на сопоставление** для ручного ревью.
+
+Проект готов к использованию в **ВКР / отчёте по практике**: полная Docker-сборка, веб-дашборд, Telegram-бот, тесты и инструменты для защиты.
+
+## Что это решает
+
+- **Сбор цен из десятков источников** — YML, XLS, XLSX, JSON и локальные файлы в единый нормализованный слой.
+- **Контроль качества данных** — полнота полей, exact-пересечения по `barcode` / `vendor_code`, `source_health` с ошибками и длительностью загрузки.
+- **Price intelligence** — медиана, индекс цены, эвристика себестоимости и floor-маржи, рекомендуемое действие.
+- **Ассистированное сопоставление** — fuzzy-кандидаты (Jaccard / TF‑IDF) и LLM-второе мнение, которые аналитик подтверждает или отклоняет вручную.
+- **Аномалии и прогноз** — воркер ищёт скачки цен, поддельные скидки и строит упрощённый линейный прогноз.
+
+## Возможности
+
+- Мультиисточниковый ETL с `docker compose up`.
+- Нормализованный слой `normalized_offers` + канонические кластеры `canonical_products`.
+- Веб-интерфейс аналитика: «Сегодня», рынок, источники, сопоставления, алерты.
+- Telegram-бот для быстрых запросов.
+- Alembic-миграции, pytest-тесты, CI-ready структура.
+- Инструменты для защиты: отчёты, диаграммы, скриншоты, выгрузки.
 
 ## Быстрый старт
 
-### 1. Токен Telegram-бота (опционально, для `bot`)
+### 1. Переменные окружения
 
-Telegram → @BotFather → `/newbot` → скопируйте токен.
+Скопируйте пример и настройте `.env`:
 
-### 2. Переменные окружения
+```bash
+cp env.example .env
+# отредактируйте .env в редакторе
+```
 
-Создайте `.env` в корне (см. **[env.example](env.example)**):
+Минимальный набор:
 
 ```env
 POSTGRES_USER=courseuser
@@ -21,71 +43,112 @@ POSTGRES_DB=prices_db
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
 
+# Опционально: Telegram-бот
 BOT_TOKEN=your_token_here_from_botfather
 
-# Демо-точки истории цен для графиков (1/0); воркер аналитики
 SEED_DEMO_HISTORY=1
 AI_WORKER_INTERVAL_SEC=300
-# Порог TF‑IDF EKF↔TDM (кандидаты, см. docs/PRODUCT_SCOPE.md); по умолчанию 0.45
-# AI_MATCH_MIN_SCORE=0.45
-# Источник, считающийся «нашим» в KPI market position (норм. слой)
-# OUR_PRICING_SOURCE=EKF YML
-# FakeStore (демо) выключен по умолчанию; включение: ENABLE_FAKESTORE=1
-# Доп. переменные: [env.example](env.example) (SHOP_ITEM_LIMIT, AI_MATCH_LIMIT_PER_SHOP, …)
 ```
 
-После обновления кода с миграциями схема БД подтягивается при старте (`init_db` → Alembic). **003** (`alembic/versions/003_price_intelligence_layer.py`) добавляет `normalized_offers`, `canonical_products`, `source_health`. **002** — поля `match_kind` / `match_status` в `product_matches`.
+Полный список переменных и их смысл — в [`env.example`](./env.example) и [`docs/PRODUCT_SCOPE.md`](docs/PRODUCT_SCOPE.md).
 
-### 3. Запуск
+### 2. Запуск
 
 ```bash
 docker compose up -d --build
 ```
 
-Переменные из `.env` для ETL и KPI, если они заданы, подставляются в compose и передаются в сервисы: у **collector** — `SHOP_ITEM_LIMIT`, `ENABLE_FAKESTORE`, таймауты Complect-Service (`COMPLECT_SERVICE_*`), Syperopt, EKF, TDM, опционально **`LOCAL_PRICE_XLS_PATH`** (локальный `.xls` в `normalized_offers`; без env подхватывается **`zayavka77rybinsk.xls`** из текущего каталога при наличии файла), `BARCODE_REFERENCE_AUTO_LOAD`, `ENABLE_OWWA`; API **barcodes-catalog.ru** в основной цикл collector **не входит** (Cloudflare). У **web** и **ai_worker** — `OUR_PRICING_SOURCE`, `OUR_PRICING_SOURCE_PRIORITY`, `AI_MATCH_SOURCE_PAIRS`, квоты **`AI_MATCH_OFFER_CAP` / `AI_MATCH_OFFER_CAP_PER_PAIR`**, флаг легаси **`AI_MATCH_SINGLE_PAIR_FALLBACK`** и др. Таблица `source_health` в UI `/sources` показывает `last_error` и длительность загрузки. Загрузка штрихкодов Catalog.app: `python -m app.tools.fetch_barcode_reference_catalog` или `app.collectors.barcode_reference_loader` (см. `env.example`). Локальный `docker-compose.override.yml` может переопределить порты (например **8010** вместо 8000).
+Откройте дашборд: [http://localhost:8000](http://localhost:8000)
 
-В **`normalized_offers` / `source_health`** попадают: **EKF YML**, **TDM Electric**, **Syperopt XLSX**, прайсы **Комплект-Сервис** (имена вида `EKF (Комплект-Сервис)`, `IEK (Комплект-Сервис)`, `Schneider Electric (КС)`, `Legrand (Комплект-Сервис)`, `WAGO (Комплект-Сервис)`, `Full Price (Комплект-Сервис)` — агрегированный full пропускается, если успешно загружены все пять брендовых XLS), **TBM Market** и **GalaCentre** (YML), опционально локальный файл **`zayavka77rybinsk.xls`** как источник **`ТДМ Рыбинск (заявка)`** (тот же формат, что федеральный прайс ТДМ; в строках проставляется `brand=TDM`). См. `app/collectors/local_price_defaults.py` и раздел **«Источники данных»** ниже с URL.
-
-По умолчанию **PostgreSQL и Adminer не проброшены на хост** (только внутри сети Docker). Чтобы открыть порты `5432` и `8080` для локальной отладки:
+Для доступа к PostgreSQL и Adminer на хосте:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-**Опционально — защита веб-интерфейса:** если в `.env` задать **оба** параметра `WEB_BASIC_AUTH_USER` и `WEB_BASIC_AUTH_PASSWORD`, дашборд и CSV потребуют HTTP Basic Auth (эндпоинты `/health` и `/ready` остаются без пароля).
-
-Сервисы:
-
-| Сервис     | Назначение |
-|------------|------------|
-| `db`       | PostgreSQL |
-| `adminer`  | Веб-админка БД (порт 8080 только с `docker-compose.dev.yml`) |
-| `collector`| ETL, сбор прайсов |
-| `web`      | **Аналитика** → http://localhost:8000 |
-| `ai_worker`| Аномалии, fuzzy-кандидаты по **normalized_offers** (по умолчанию TDM↔Комплект/Syperopt, **TDM Electric↔ТДМ Рыбинск (заявка)** для локального файла, в конце EKF YML↔TDM), опционально legacy TF‑IDF по `products`, прогнозы |
-| `bot`      | Telegram-бот |
-
-### 4. Проверка
+### 3. Проверка
 
 ```bash
 curl -s http://localhost:8000/health
 curl -s http://localhost:8000/ready
 docker compose logs -f collector
-docker compose logs -f ai_worker
 ```
 
-В браузере: **http://localhost:8000** — **«Сегодня»** (сигналы KPI, источники, ревью), **рынок** (`/market`), **источники** (`/sources`), товары, **алерты** (`/alerts`, бывш. аномалии), сопоставления, выгрузки CSV.
+## Сервисы
 
-**Пакет для защиты (полный ETL, цифры, скриншоты):** после цикла `collector` запустите [`tools/etl_defense_report.py`](tools/etl_defense_report.py) — срез `source_health`, агрегаты по `normalized_offers` / канонам / `normalized_offer_matches` и готовый список URL веб-UI. Команды, ожидание по логу и порт **8010** с override — в **[COMMANDS.md](COMMANDS.md)** (раздел «Защита»).
+| Сервис | Назначение |
+|--------|------------|
+| `db` | PostgreSQL |
+| `adminer` | Веб-админка БД (только с `docker-compose.dev.yml`) |
+| `collector` | ETL: сбор, нормализация и загрузка прайсов |
+| `web` | FastAPI + Jinja2 дашборд → [http://localhost:8000](http://localhost:8000) |
+| `ai_worker` | Аномалии, fuzzy-кандидаты, прогнозы |
+| `bot` | Telegram-бот |
 
-**Аудит прайс-файлов** (покрытие price/vendor_code/barcode, `usable_score`) в CSV:
+## Архитектура и стек
 
-```bash
-.venv/bin/python -m app.tools.source_audit
-# → source_audit.csv в текущем каталоге; путь: SOURCE_AUDIT_OUT=путь/к/файлу
+| Область | Технология |
+|---------|------------|
+| Язык | Python 3.12 |
+| Веб | FastAPI, Jinja2, HTMX-like шаблоны |
+| База данных | PostgreSQL 16, SQLAlchemy, Alembic |
+| ML/аналитика | scikit-learn, pandas, numpy |
+| Инфраструктура | Docker, Docker Compose, nginx |
+| Тесты | pytest, coverage |
+| Автоматизация | GitHub Actions (`.github/workflows`) |
+
+## Структура проекта
+
+```text
+.
+├── app/
+│   ├── collector.py            # основной ETL-цикл
+│   ├── ai_worker.py            # воркер аномалий и fuzzy-сопоставления
+│   ├── bot.py                  # Telegram-бот
+│   ├── database.py             # модели SQLAlchemy
+│   ├── analytics/              # price intelligence, KPI, canonical sync
+│   ├── collectors/             # парсеры конкретных источников
+│   ├── matching/               # нормализация имён и текстовые эвристики
+│   ├── ml/                     # TF-IDF, Jaccard, name normalization
+│   ├── quality/                # метрики полноты и exact-пересечений
+│   ├── services/               # общие read-запросы
+│   └── web/                    # FastAPI + шаблоны
+├── alembic/                    # миграции БД
+├── tests/                      # pytest
+├── tools/                      # скрипты защиты, диаграммы, отчёты
+├── docs/                       # продуктовая и академическая документация
+├── docker-compose.yml          # production-like запуск
+├── docker-compose.dev.yml      # dev-порты db/adminer
+├── env.example                 # шаблон переменных окружения
+└── COMMANDS.md                 # шпаргалка по командам
 ```
 
-### 5. Тесты (локально)
+## Источники данных
+
+| Источник | Формат | URL |
+|----------|--------|-----|
+| ЦБ РФ | XML | `http://www.cbr.ru/scripts/XML_daily.asp` |
+| EKF | YML | `https://export-xml.storage.yandexcloud.net/products.yml` |
+| TDM Electric | XLS | `https://tdme.ru/download/priceTDM.xls` |
+| Комплект-Сервис (бренды) | XLS | `https://www.complect-service.ru/prices/ekf.xls` и др. |
+| Syperopt | XLSX | `http://www.syperopt.ru/price_wago_abb_legrand_iek_495t5890043_syperopt_ru.xlsx` |
+| TBM Market | YML | `https://www.tbmmarket.ru/tbmmarket/service/yandex-market.xml` |
+| GalaCentre | YML | `https://www.galacentre.ru/download/yml/yml.xml` |
+| FakeStore | JSON | `https://fakestoreapi.com/products` (только при `ENABLE_FAKESTORE=1`) |
+
+Справочник штрихкодов (Tier B): Catalog.app ZIP — см. `env.example`.
+
+## Важное уточнение про сопоставление
+
+Система **не** обещает полностью автоматическое объединение каталогов без ошибок. Она даёт:
+
+1. **Exact-пересечения** по устойчивым ключам (`barcode`, `vendor_code`, `brand+артикул`).
+2. **Fuzzy-кандидатов** по сходству наименований (Jaccard / TF‑IDF).
+3. **Ручной ревью** в веб-интерфейсе: подтвердить или отклонить.
+
+Подробнее — в [`docs/PRODUCT_SCOPE.md`](docs/PRODUCT_SCOPE.md).
+
+## Тесты
 
 ```bash
 python3 -m venv .venv
@@ -93,68 +156,18 @@ python3 -m venv .venv
 .venv/bin/pytest tests/ -q
 ```
 
-## Структура проекта (runtime)
-
-```
-├── app/
-│   ├── database.py          # Модели БД (+ история, аномалии, матчи, прогноз)
-│   ├── collector.py         # ETL
-│   ├── price_history_util.py
-│   ├── matching/            # нормализация имён, эвристики сравнения (бот / ETL / отчёты)
-│   ├── quality/             # полнота полей + exact-пересечения для дашборда
-│   ├── services/            # общие read-запросы (например SQL для бота)
-│   ├── bot.py               # Telegram
-│   ├── ai_worker.py         # аномалии, кандидаты TF‑IDF, прогноз
-│   ├── ml/                  # Аномалии, TF-IDF
-│   └── web/                 # FastAPI + Jinja2 + шаблоны (+ web/services: агрегаты дашборда)
-├── tests/                   # pytest
-├── docs/                    # заметки к рефакторингу
-├── alembic/                 # миграции схемы (патчи индексов / колонок)
-├── docker-compose.yml
-└── docker-compose.dev.yml   # опционально: порты db + adminer на хост
-```
-
-**Тексты ВКР / пояснительные записки** (`VKR_AND_PRACTICE_REPORT.md`, `README_REPORT.md`, `INDEX.md` и т.д.) остаются в репо как документация; **крупные бинарники** (XLS, PDF, изображения, снимки прайсов) в индекс git не попадают — см. `.gitignore` и [docs/REFACTOR_NOTES.md](docs/REFACTOR_NOTES.md). Храните такие файлы локально, в LFS или в релизах.
-
-## Источники данных
-
-Активные коллекторы и публичные URL (константы в основном в `app/collector.py`, `app/collectors/complect_service.py`, `app/collectors/syperopt.py`):
-
-| Источник | Описание | URL |
-|----------|----------|-----|
-| ЦБ РФ | Курс USD (XML) | `http://www.cbr.ru/scripts/XML_daily.asp` |
-| TBM Market | YML | `https://www.tbmmarket.ru/tbmmarket/service/yandex-market.xml` |
-| GalaCentre | YML | `https://www.galacentre.ru/download/yml/yml.xml` |
-| EKF | YML | `https://export-xml.storage.yandexcloud.net/products.yml` |
-| TDM Electric | XLS | `https://tdme.ru/download/priceTDM.xls` |
-| Complect-Service EKF | XLS | `https://www.complect-service.ru/prices/ekf.xls` |
-| Complect-Service IEK | XLS | `https://www.complect-service.ru/prices/ieknew.xls` |
-| Complect-Service Schneider | XLS | `https://www.complect-service.ru/prices/schneider.xls` |
-| Complect-Service Legrand | XLS | `https://www.complect-service.ru/prices/legrand.xls` |
-| Complect-Service WAGO | XLS | `https://www.complect-service.ru/prices/wago.xls` |
-| Complect-Service Full | XLS | `https://www.complect-service.ru/prices/fullpricecp.xls` (пропуск при успешных пяти брендах) |
-| Syperopt | XLSX | `http://www.syperopt.ru/price_wago_abb_legrand_iek_495t5890043_syperopt_ru.xlsx` |
-| FakeStore | JSON | `https://fakestoreapi.com/products` (только при `ENABLE_FAKESTORE=1`) |
-
-Справочник штрихкодов (Tier B): ZIP Catalog.app `https://catalog.app/public-opportunities/download-public-file?fileName=barcodes_csv.zip` — загрузка вручную или `BARCODE_REFERENCE_AUTO_LOAD=true` при пустой таблице.
-
-### Имена источников: `products` vs normalized layer
-
-В legacy-таблице `products` источник EKF хранится как **`EKF`**. В нормализованном слое (`normalized_offers`, KPI, `/market`) тот же фид называется **`EKF YML`** (см. `OUR_PRICING_SOURCE`, по умолчанию `EKF YML`). Воркер сопоставления офферов использует имена нормализованного слоя (`AI_MATCH_NORMALIZED_LEFT` / `RIGHT`).
-
 ## Документация
 
-- **[docs/PRODUCT_SCOPE.md](docs/PRODUCT_SCOPE.md)** — **объём продукта** по сопоставлению: кандидаты vs exact-ключи, ревью, формулировки для тезисов/ВКР.
-- **[VKR_AND_PRACTICE_REPORT.md](VKR_AND_PRACTICE_REPORT.md)** — структура ВКР и отчёта по практике (главы 1–3).
-- **[README_REPORT.md](README_REPORT.md)** — пояснительная записка с диаграммами (актуализируйте под веб/ИИ при сдаче).
-- **[docs/REFACTOR_NOTES.md](docs/REFACTOR_NOTES.md)** — изменения в структуре кода и гигиене репозитория.
+- [`docs/PRODUCT_SCOPE.md`](docs/PRODUCT_SCOPE.md) — объём продукта и терминология.
+- [`COMMANDS.md`](COMMANDS.md) — команды для запуска, отладки, защиты.
+- [`ENV_SETUP.md`](ENV_SETUP.md) — как создать `.env` и получить токен бота.
+- [`VKR_AND_PRACTICE_REPORT.md`](VKR_AND_PRACTICE_REPORT.md) — структура ВКР и отчёта по практике.
+- [`CHANGELOG.md`](CHANGELOG.md) — история изменений.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — как участвовать.
 
-## Остановка
+## Лицензия
 
-```bash
-docker compose down      # контейнеры, volume БД сохраняется
-docker compose down -v   # полная очистка данных
-```
+[MIT](./LICENSE) © Shugar86.
 
 ---
 

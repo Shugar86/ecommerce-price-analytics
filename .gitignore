@@ -69,3 +69,11 @@ diagrams_viewer.html
 README_REPORT — копия*.txt
 *_копия*.txt
 
+# Generated / large local artifacts
+.coverage
+.ruff_cache/
+.venv_docx/
+assets/
+output/
+source_audit.csv
+

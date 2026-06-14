@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}RuEcom-2026 — сопоставление товаров{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+        <div>
+            <h1 style="margin:0;">RuEcom-2026: качество сопоставления товаров</h1>
+            <div class="page-subtitle">
+                Актуальные прайс-листы РФ/СНГ 2026 • эталонная разметка по barcode / brand+vendor_code • показатель сходства только по нормализованным названиям
+            </div>
+        </div>
+        <div>
+            <a href="#artifacts" class="btn btn-primary btn-sm" style="text-decoration:none;">📥 Скачать материалы</a>
+        </div>
+    </div>
+</div>
+
+<div class="card" style="background:linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%); border-color:#bfdbfe;">
+    <div class="card-title" style="color:#1e40af;">Методология оценки качества</div>
+    <p style="margin:0; color:#1e3a8a; font-size:0.95rem;">
+        Данный эталонный набор данных демонстрирует качество эвристического сопоставления на реальных данных 10+ поставщиков.
+        В производственном контуре <strong>Gemini 1.5 Flash</strong> дополнительно обрабатывает «серую» зону
+        показателя сходства (порядка 25–45% текстового совпадения): вердикты видны на странице
+        <a href="/matches">«Сопоставление» (/matches)</a> в колонке <strong>LLM Verdict</strong>.
+        Все метрики, кривая точности-полноты и матрица ошибок здесь остаются воспроизводимой базовой оценкой без вызова внешнего API.
+    </p>
+</div>
+
+{% if not has_artifacts %}
+<div class="card">
+    <div class="card-title">Артефакты ещё не найдены</div>
+    <p class="muted">
+        Сгенерируйте benchmark командой:
+        <code>python tools/build_ru_matching_benchmark.py --out-dir artifacts/ru_benchmark</code>
+        или Docker-командой из <code>docs/DEMO_DATASET.md</code>.
+    </p>
+</div>
+{% else %}
+
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-label">Всего пар</div>
+        <div class="kpi-value kv-accent">{{ summary.pairs_total }}</div>
+        <div class="kpi-sub">pairs.csv</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Match</div>
+        <div class="kpi-value kv-success">{{ summary.positive_pairs }}</div>
+        <div class="kpi-sub">barcode / brand+vendor_code</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Hard negative</div>
+        <div class="kpi-value kv-warning">{{ summary.negative_pairs }}</div>
+        <div class="kpi-sub">похожий бренд, другой код</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Best F1</div>
+        <div class="kpi-value">{{ "%.3f"|format(best_f1.f1 or 0) }}</div>
+        <div class="kpi-sub">threshold {{ best_f1.threshold }}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Precision / Recall</div>
+        <div class="kpi-value" style="font-size:1.05rem;">
+            {{ "%.3f"|format(best_f1.precision or 0) }} / {{ "%.3f"|format(best_f1.recall or 0) }}
+        </div>
+        <div class="kpi-sub">baseline по названиям</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">Методика формирования эталонной выборки</div>
+    <div class="attention-list">
+        <div class="attention-item ai-info">
+            <span><strong>Эталонная метка</strong> строится по устойчивым ключам: <code>barcode</code> или <code>brand+vendor_code</code>.</span>
+        </div>
+        <div class="attention-item ai-info">
+            <span><strong>Показатель сходства</strong> считается только по нормализованным названиям. Ключи не используются как признаки модели.</span>
+        </div>
+        <div class="attention-item ai-success">
+            <span>На <a class="row-link" href="/alerts">/alerts</a> и карточках товаров доступны <strong>краткие объяснения срабатываний</strong> через Gemini (если задан <code>GOOGLE_API_KEY</code> для сервиса web).</span>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Визуализация результатов анализа</div>
+        <span class="badge badge-info">High-DPI • Light theme • 300 dpi</span>
+    </div>
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 1.25rem;">
+        {% for img in images %}
+        <div style="border:1px solid var(--border); border-radius:10px; overflow:hidden; background:#fff;">
+            <div style="padding:0.6rem 0.85rem; background:var(--card-hover); display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border);">
+                <div style="font-weight:600; font-size:0.82rem; color:var(--text-2);">{{ img.name | replace('.png','') | replace('_',' ') | title }}</div>
+                {% if img.exists %}
+                <a href="{{ img.url }}" download class="btn btn-ghost btn-sm" style="padding:0.2rem 0.55rem; font-size:0.72rem;">PNG ⤓</a>
+                {% endif %}
+            </div>
+            {% if img.exists %}
+            <a href="{{ img.url }}" target="_blank" style="display:block; background:#fff;">
+                <img src="{{ img.url }}" alt="{{ img.name }}" style="width:100%; display:block; border:0; background:#fff;">
+            </a>
+            {% else %}
+            <div class="empty-state" style="padding:2rem 1rem; margin:0;"><p>Файл не найден: <code>{{ img.name }}</code></p></div>
+            {% endif %}
+            <div style="padding:0.45rem 0.85rem; font-size:0.75rem; color:var(--muted); background:#fff; border-top:1px solid var(--border);">
+                {% if 'score_distribution' in img.name %}Распределение показателя сходства для совпадений и сложных отрицательных примеров{% elif 'precision_recall' in img.name %}Кривая точности-полноты при варьировании порога{% elif 'f1_by' in img.name %}F1-score по порогам; вертикаль — оптимальный порог{% elif 'confusion' in img.name %}Матрица ошибок на лучшем пороге (TP/FP/FN/TN){% else %}Визуализация метрик эталонного набора данных{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div id="artifacts" class="card">
+    <div class="card-header">
+        <div class="card-title">Материалы для скачивания и воспроизведения</div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+        <a class="btn btn-primary" href="/ru-benchmark/artifacts/pairs.csv" download><span>📄</span> pairs.csv <small style="opacity:0.7;">(все пары)</small></a>
+        <a class="btn btn-primary" href="/ru-benchmark/artifacts/metrics.csv" download><span>📊</span> metrics.csv</a>
+        <a class="btn btn-primary" href="/ru-benchmark/artifacts/top_examples.csv" download><span>⭐</span> top_examples.csv</a>
+        <a class="btn btn-primary" href="/ru-benchmark/artifacts/summary.json" download><span>📋</span> summary.json</a>
+        {% for img in images if img.exists %}
+        <a class="btn btn-ghost" href="{{ img.url }}" download>{{ img.name | replace('.png','') }}.png</a>
+        {% endfor %}
+    </div>
+    <div class="muted" style="font-size:0.8rem;">Путь: <code style="background:var(--card-hover); padding:1px 5px; border-radius:3px;">{{ artifact_dir }}</code> • Сгенерировано: <code>tools/build_ru_matching_benchmark.py</code></div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Примеры сложных пар для проверки</div>
+        <span class="badge">{{ examples|length }} записей</span>
+    </div>
+    {% if examples %}
+    <div style="overflow-x:auto; border:1px solid var(--border); border-radius:8px;">
+    <table style="min-width:1100px; font-size:0.82rem;">
+        <thead>
+        <tr>
+            <th style="width:90px;">Тип</th>
+            <th style="width:70px;">Score</th>
+            <th style="width:130px;">LLM зона</th>
+            <th style="width:180px;">Источники</th>
+            <th>Левое название (норм.)</th>
+            <th>Правое название (норм.)</th>
+            <th style="width:130px;">Коды</th>
+            <th style="width:70px; text-align:right;">Δ цены</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for row in examples %}
+        {% set s = row.name_score|float %}
+        {% set gray = (s > 0.25) and (s < 0.45) %}
+        <tr style="
+            {% if row.bucket != 'true_match' %}background:#fefce8;
+            {% elif gray %}background:#eef2ff;
+            {% endif %}">
+            <td>
+                {% if row.bucket == "true_match" %}
+                <span class="badge badge-success">✓ match</span>
+                {% else %}
+                <span class="badge badge-warning">⚠ hard neg</span>
+                {% endif %}
+            </td>
+            <td><strong style="font-family:ui-monospace; color:#0f172a;">{{ "%.3f"|format(row.name_score|float) }}</strong></td>
+            <td style="vertical-align:middle;">
+                {% if gray %}
+                <span class="badge badge-info" title="В ai_worker такие пары при ENABLE_GEMINI_VALIDATION отправляются в Gemini">⚡ Gemini</span>
+                <div class="muted" style="font-size:0.65rem; margin-top:3px;">0.25 &lt; s &lt; 0.45</div>
+                {% else %}
+                <span class="muted">—</span>
+                {% endif %}
+            </td>
+            <td style="font-size:0.72rem; line-height:1.3;"><code style="font-size:0.68rem;">{{ row.left_source[:22] }}</code><br><code style="font-size:0.68rem;">{{ row.right_source[:22] }}</code></td>
+            <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ row.left_name }}">{{ row.left_name }}</td>
+            <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ row.right_name }}">{{ row.right_name }}</td>
+            <td style="font-size:0.72rem;"><code>{{ row.left_vendor_code }}</code><br><code>{{ row.right_vendor_code }}</code></td>
+            <td style="text-align:right; font-weight:600; {% if row.price_gap_pct and row.price_gap_pct|float > 15 %}color:#854d0e;{% endif %}">{% if row.price_gap_pct %}{{ "%.1f"|format(row.price_gap_pct|float) }}%{% else %}<span style="color:#94a3b8;">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <div class="muted" style="margin-top:0.6rem; font-size:0.78rem;">Строки с подсветкой <strong>#eef2ff</strong> попадают в «серую» зону: те же интервалы, что и для вызова Gemini в ИИ-воркере. Жёлтым по-прежнему выделены hard negatives.</div>
+    {% else %}
+    <div class="empty-state"><p>Нет примеров. Проверьте <code>top_examples.csv</code>.</p></div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-title">Источники label</div>
+    <table>
+        <thead><tr><th>label_source</th><th>Пар</th></tr></thead>
+        <tbody>
+        {% for key, value in label_sources.items() %}
+        <tr><td><code>{{ key }}</code></td><td>{{ value }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% endif %}
+{% endblock %}
