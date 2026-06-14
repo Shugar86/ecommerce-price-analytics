@@ -1,40 +1,41 @@
-# Price Intelligence для B2B-прайсов
+# PriceDesk — ценовая аналитика B2B-прайсов
 
-> Аналитика цен, которая не кричит, а показывает цифры: собирает прайсы, строит историю и помогает принимать решения на основе данных, а не интуиции.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](./requirements.txt)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](./docker-compose.yml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](./app/web/main.py)
+[![CI](https://img.shields.io/badge/CI-GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](./.github/workflows/ci.yml)
 
-Это микросервисное приложение для сбора и визуального анализа цен в электротехническом B2B-сегменте. Оно объединяет фиды поставщиков (EKF, TDM Electric, Комплект-Сервис, Syperopt и др.), нормализует офферы, считает рыночные KPI и даёт аналитику **кандидатов на сопоставление** для ручного ревью.
+> **Аналитика, которая не кричит, а показывает цифры.**
 
-Проект готов к использованию в **ВКР / отчёте по практике**: полная Docker-сборка, веб-дашборд, Telegram-бот, тесты и инструменты для защиты.
+## Что это
 
-## Что это решает
+**PriceDesk** — микросервисное приложение для сбора, нормализации и визуального анализа цен в электротехническом B2B-сегменте. Оно объединяет прайс-листы поставщиков (EKF, TDM Electric, Комплект-Сервис, Syperopt и др.), строит единый нормализованный слой офферов, считает рыночные KPI и помогает аналитику принимать решения на основе данных, а не интуиции.
 
-- **Сбор цен из десятков источников** — YML, XLS, XLSX, JSON и локальные файлы в единый нормализованный слой.
-- **Контроль качества данных** — полнота полей, exact-пересечения по `barcode` / `vendor_code`, `source_health` с ошибками и длительностью загрузки.
-- **Price intelligence** — медиана, индекс цены, эвристика себестоимости и floor-маржи, рекомендуемое действие.
-- **Ассистированное сопоставление** — fuzzy-кандидаты (Jaccard / TF‑IDF) и LLM-второе мнение, которые аналитик подтверждает или отклоняет вручную.
-- **Аномалии и прогноз** — воркер ищёт скачки цен, поддельные скидки и строит упрощённый линейный прогноз.
+Система создана в первую очередь для **ВКР / отчёта по практике**: полная Docker-сборка, веб-дашборд, Telegram-бот, тесты и инструменты для защиты — всё работает из коробки.
 
 ## Возможности
 
-- Мультиисточниковый ETL с `docker compose up`.
-- Нормализованный слой `normalized_offers` + канонические кластеры `canonical_products`.
-- Веб-интерфейс аналитика: «Сегодня», рынок, источники, сопоставления, алерты.
-- Telegram-бот для быстрых запросов.
-- Alembic-миграции, pytest-тесты, CI-ready структура.
-- Инструменты для защиты: отчёты, диаграммы, скриншоты, выгрузки.
+- ⚡ **Мультиисточниковый ETL** — YML, XLS, XLSX, JSON и локальные файлы в единую БД через `docker compose up`.
+- 🧹 **Нормализованный слой** — таблицы `normalized_offers` и `canonical_products` с едиными полями цен, брендов, артикулов и штрихкодов.
+- 📊 **Price intelligence** — медиана рынка, индекс цены, эвристика себестоимости, floor-маржа и рекомендуемое действие.
+- 🔍 **Ассистированное сопоставление** — exact-пересечения по штрихкоду / артикулу + fuzzy-кандидаты (Jaccard / TF‑IDF) с ручным ревью в веб-интерфейсе.
+- 🤖 **Telegram-бот** — быстрый поиск товаров, статистика и алерты.
+- 🛡️ **Аномалии и прогноз** — ML-воркер ищет скачки цен, поддельные скидки и строит упрощённый линейный прогноз.
+- 🎓 **Готовность к защите** — Alembic-миграции, pytest, CI, скрипты отчётов и визуализаций.
 
 ## Быстрый старт
 
-### 1. Переменные окружения
-
-Скопируйте пример и настройте `.env`:
+### 1. Клонировать и настроить окружение
 
 ```bash
+git clone https://github.com/Shugar86/ecommerce-price-analytics.git
+cd ecommerce-price-analytics
 cp env.example .env
-# отредактируйте .env в редакторе
+# отредактируйте .env: BOT_TOKEN от @BotFather, пароли БД и т.д.
 ```
 
-Минимальный набор:
+Минимальный `.env`:
 
 ```env
 POSTGRES_USER=courseuser
@@ -43,16 +44,15 @@ POSTGRES_DB=prices_db
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
 
-# Опционально: Telegram-бот
 BOT_TOKEN=your_token_here_from_botfather
 
-SEED_DEMO_HISTORY=1
 AI_WORKER_INTERVAL_SEC=300
+SEED_DEMO_HISTORY=1
 ```
 
-Полный список переменных и их смысл — в [`env.example`](./env.example) и [`docs/PRODUCT_SCOPE.md`](docs/PRODUCT_SCOPE.md).
+> Полный список переменных и их смысл — в [`env.example`](./env.example) и [`docs/PRODUCT_SCOPE.md`](./docs/PRODUCT_SCOPE.md).
 
-### 2. Запуск
+### 2. Запустить стек
 
 ```bash
 docker compose up -d --build
@@ -60,13 +60,14 @@ docker compose up -d --build
 
 Откройте дашборд: [http://localhost:8000](http://localhost:8000)
 
-Для доступа к PostgreSQL и Adminer на хосте:
+Для доступа к PostgreSQL и Adminer с хоста:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Adminer: http://localhost:8080
 ```
 
-### 3. Проверка
+### 3. Проверить, что всё поднялось
 
 ```bash
 curl -s http://localhost:8000/health
@@ -74,28 +75,65 @@ curl -s http://localhost:8000/ready
 docker compose logs -f collector
 ```
 
-## Сервисы
+Успешный цикл сбора подтверждается строками `ETL_SOURCE_HEALTH_SUMMARY` и `✅ Цикл сбора данных завершен`.
 
-| Сервис | Назначение |
-|--------|------------|
-| `db` | PostgreSQL |
-| `adminer` | Веб-админка БД (только с `docker-compose.dev.yml`) |
-| `collector` | ETL: сбор, нормализация и загрузка прайсов |
-| `web` | FastAPI + Jinja2 дашборд → [http://localhost:8000](http://localhost:8000) |
-| `ai_worker` | Аномалии, fuzzy-кандидаты, прогнозы |
-| `bot` | Telegram-бот |
+### 4. Telegram-бот
 
-## Архитектура и стек
+Найдите своего бота в Telegram и отправьте:
+
+```text
+/start
+/stats
+/find tdm e14 gu10
+```
+
+## Архитектура
+
+```mermaid
+flowchart LR
+    subgraph Источники
+        A1[EKF YML]
+        A2[TDM XLS]
+        A3[Комплект-Сервис]
+        A4[Syperopt]
+        A5[Локальный XLS]
+    end
+
+    B[collector<br/>ETL + нормализация]
+    C[(PostgreSQL 15<br/>normalized_offers)]
+    D[web<br/>FastAPI + дашборд]
+    E[ai_worker<br/>аномалии + fuzzy]
+    F[bot<br/>Telegram]
+
+    Источники --> B
+    B --> C
+    C --> D
+    C --> E
+    C --> F
+```
+
+### Стек
 
 | Область | Технология |
 |---------|------------|
-| Язык | Python 3.12 |
-| Веб | FastAPI, Jinja2, HTMX-like шаблоны |
-| База данных | PostgreSQL 16, SQLAlchemy, Alembic |
-| ML/аналитика | scikit-learn, pandas, numpy |
+| Язык | Python 3.11+ |
+| Веб / API | FastAPI, Jinja2 |
+| База данных | PostgreSQL 15, SQLAlchemy 2.x, Alembic |
+| ML / аналитика | scikit-learn, pandas, numpy |
 | Инфраструктура | Docker, Docker Compose, nginx |
-| Тесты | pytest, coverage |
-| Автоматизация | GitHub Actions (`.github/workflows`) |
+| Тесты | pytest, httpx |
+| CI | GitHub Actions |
+
+### Сервисы Docker Compose
+
+| Сервис | Назначение | Порт |
+|--------|------------|------|
+| `db` | PostgreSQL | — (5432 в `docker-compose.dev.yml`) |
+| `adminer` | Веб-админка БД (только dev) | 8080 |
+| `collector` | ETL: сбор, нормализация и загрузка прайсов | — |
+| `web` | FastAPI + Jinja2 дашборд | 8000 |
+| `ai_worker` | Аномалии, fuzzy-кандидаты, прогнозы | — |
+| `bot` | Telegram-бот | — |
 
 ## Структура проекта
 
@@ -112,7 +150,7 @@ docker compose logs -f collector
 │   ├── ml/                     # TF-IDF, Jaccard, name normalization
 │   ├── quality/                # метрики полноты и exact-пересечений
 │   ├── services/               # общие read-запросы
-│   └── web/                    # FastAPI + шаблоны
+│   └── web/                    # FastAPI + шаблоны Jinja2
 ├── alembic/                    # миграции БД
 ├── tests/                      # pytest
 ├── tools/                      # скрипты защиты, диаграммы, отчёты
@@ -120,7 +158,9 @@ docker compose logs -f collector
 ├── docker-compose.yml          # production-like запуск
 ├── docker-compose.dev.yml      # dev-порты db/adminer
 ├── env.example                 # шаблон переменных окружения
-└── COMMANDS.md                 # шпаргалка по командам
+├── COMMANDS.md                 # шпаргалка по командам
+├── ENV_SETUP.md                # как создать .env и получить токен
+└── README_REPORT.md            # полная академическая документация
 ```
 
 ## Источники данных
@@ -136,38 +176,78 @@ docker compose logs -f collector
 | GalaCentre | YML | `https://www.galacentre.ru/download/yml/yml.xml` |
 | FakeStore | JSON | `https://fakestoreapi.com/products` (только при `ENABLE_FAKESTORE=1`) |
 
-Справочник штрихкодов (Tier B): Catalog.app ZIP — см. `env.example`.
+Справочник штрихкодов (Tier B) — см. [`env.example`](./env.example).
 
-## Важное уточнение про сопоставление
+## Сопоставление: честно про границы
 
-Система **не** обещает полностью автоматическое объединение каталогов без ошибок. Она даёт:
+PriceDesk **не** обещает полностью автоматическое объединение каталогов без ошибок. Она даёт:
 
-1. **Exact-пересечения** по устойчивым ключам (`barcode`, `vendor_code`, `brand+артикул`).
+1. **Exact-пересечения** по устойчивым ключам: `barcode`, `vendor_code`, `brand + артикул`.
 2. **Fuzzy-кандидатов** по сходству наименований (Jaccard / TF‑IDF).
-3. **Ручной ревью** в веб-интерфейсе: подтвердить или отклонить.
+3. **Ручной ревью** в веб-интерфейсе: подтвердить или отклонить каждого кандидата.
 
-Подробнее — в [`docs/PRODUCT_SCOPE.md`](docs/PRODUCT_SCOPE.md).
+Подробнее — в [`docs/PRODUCT_SCOPE.md`](./docs/PRODUCT_SCOPE.md).
+
+## Примеры
+
+### Проверка API
+
+```bash
+# жива ли служба?
+curl -s http://localhost:8000/health
+# {"status":"ok"}
+
+# готова ли к трафику (БД доступна)?
+curl -s http://localhost:8000/ready
+# {"status":"ready","database":"ok"}
+```
+
+### Веб-эндпоинты после запуска
+
+| URL | Что показывает |
+|-----|----------------|
+| `/` | Сводка KPI «Сегодня» |
+| `/market` | Рыночная позиция и цены |
+| `/sources` | Здоровье источников (`source_health`) |
+| `/matches` | Очередь fuzzy-кандидатов на ревью |
+| `/alerts` | Ценовые аномалии |
+
+### Выгрузка данных
+
+```bash
+# товары в CSV
+curl -s http://localhost:8000/export/products.csv > products.csv
+
+# аномалии в CSV
+curl -s http://localhost:8000/export/anomalies.csv > anomalies.csv
+```
 
 ## Тесты
 
+Локально (без Docker):
+
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pytest tests/ -q
+source .venv/bin/activate
+pip install -r requirements.txt
+
+python -m compileall app/ tools/ tests/
+pytest tests/ -q
 ```
 
 ## Документация
 
-- [`docs/PRODUCT_SCOPE.md`](docs/PRODUCT_SCOPE.md) — объём продукта и терминология.
-- [`COMMANDS.md`](COMMANDS.md) — команды для запуска, отладки, защиты.
-- [`ENV_SETUP.md`](ENV_SETUP.md) — как создать `.env` и получить токен бота.
-- [`VKR_AND_PRACTICE_REPORT.md`](VKR_AND_PRACTICE_REPORT.md) — структура ВКР и отчёта по практике.
-- [`CHANGELOG.md`](CHANGELOG.md) — история изменений.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — как участвовать.
+- [`docs/PRODUCT_SCOPE.md`](./docs/PRODUCT_SCOPE.md) — объём продукта и терминология.
+- [`COMMANDS.md`](./COMMANDS.md) — команды для запуска, отладки и защиты.
+- [`ENV_SETUP.md`](./ENV_SETUP.md) — как создать `.env` и получить токен бота.
+- [`FAQ.md`](./FAQ.md) — частые вопросы.
+- [`VKR_AND_PRACTICE_REPORT.md`](./VKR_AND_PRACTICE_REPORT.md) — структура ВКР и отчёта по практике.
+- [`CHANGELOG.md`](./CHANGELOG.md) — история изменений.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — как участвовать.
 
 ## Лицензия
 
-[MIT](./LICENSE) © Shugar86.
+[MIT](./LICENSE) © 2026 Shugar86.
 
 ---
 
